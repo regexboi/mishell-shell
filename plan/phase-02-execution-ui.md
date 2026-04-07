@@ -28,6 +28,7 @@ Deliver the main shell experience: a custom editor-driven command surface backed
 - Add the shell header/prompt context area with Starship-style contextual information where practical for V1.
 - Persist the execution metadata required for history features, even if some query UX arrives in the next phase.
 - Make sure the renderer architecture remains compatible with upcoming search/history and terminal-mode work.
+- End the phase with a flow a human can demo live: type a command, execute it, and inspect the resulting card output.
 
 ## Out of Scope
 
@@ -41,9 +42,11 @@ Deliver the main shell experience: a custom editor-driven command surface backed
 - A user can launch the app, enter shell commands in the custom UI, run them through a PTY, and inspect results via cards.
 - The execution pipeline records the metadata the history system will need.
 - The UI feels like a custom shell surface, not a wrapped terminal.
+- There is a clear manual test path for at least successful commands, failing commands, and output-copy actions.
 
 ## Handoff Requirements
 
 - Write `plan/handoffs/phase-02.md`.
 - Call out the editor approach, PTY execution model, and any edge cases Phase 3 or 4 must respect.
+- Include the commands and user interactions that best demonstrate the Phase 2 slice.
 - Commit the phase before stopping.

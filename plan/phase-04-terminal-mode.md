@@ -20,6 +20,7 @@ Add the compatibility layer for full-screen interactive terminal apps while pres
 - Make sure interactive tools such as `vim`, `lazygit`, and `codex` are the reference class of compatibility targets.
 - Ensure terminal mode is clearly a fallback compatibility view, not the default shell presentation.
 - Close any architecture gaps discovered in earlier phases that block robust TUI support.
+- End the phase with a demo path where a known interactive terminal app enters terminal mode and returns cleanly to the custom shell UI.
 
 ## Out of Scope
 
@@ -31,9 +32,11 @@ Add the compatibility layer for full-screen interactive terminal apps while pres
 - Interactive full-screen shell apps are usable through terminal mode.
 - Normal commands still feel native to the custom shell UI.
 - Switching between modes feels intentional and stable rather than accidental.
+- A human can validate the mode switch using at least one real interactive terminal app.
 
 ## Handoff Requirements
 
 - Write `plan/handoffs/phase-04.md`.
 - Document TUI detection behavior, compatibility assumptions, and any platform-specific caveats for final V1 hardening.
+- Include the exact apps or commands used to verify terminal-mode behavior.
 - Commit the phase before stopping.

@@ -28,6 +28,7 @@ Turn command history into a first-class system that powers recall, autocomplete,
 - Make the search results useful and metadata-rich, including command, cwd, timestamp, duration, and exit code.
 - Ensure history interactions feel fast enough for daily shell use.
 - Keep the data model and APIs extensible for later AI-assisted retrieval without actually implementing V2 features.
+- End the phase with a demo path where newly executed commands can be recalled through autocomplete, cwd-aware history, and global search.
 
 ## Out of Scope
 
@@ -39,9 +40,11 @@ Turn command history into a first-class system that powers recall, autocomplete,
 - The app has a credible rich-history experience that is materially better than shell-native history for V1.
 - Autocomplete, scoped recall, and global search all operate on the persisted history system.
 - The renderer and persistence layers remain clean enough for Phase 4 to add terminal-mode compatibility without rework.
+- A human can execute commands, restart or continue the app as appropriate, and verify that history-backed UX is working end-to-end.
 
 ## Handoff Requirements
 
 - Write `plan/handoffs/phase-03.md`.
 - Document query/indexing decisions, keyboard shortcuts, and any history limitations Phase 4 or 5 should revisit.
+- Include a small manual test script that proves autocomplete, up-arrow recall, and `Ctrl/Cmd+R` search are functioning.
 - Commit the phase before stopping.

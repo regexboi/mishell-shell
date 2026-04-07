@@ -33,6 +33,7 @@ Each phase handoff should be concise and useful to the next agent. Include:
 
 - What was completed
 - Key files or systems changed
+- How to manually test the phase outcome
 - Commands run for verification
 - Known issues, tradeoffs, or follow-up items
 - Specific advice for the next phase

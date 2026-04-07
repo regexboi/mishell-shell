@@ -27,6 +27,8 @@ When asked to execute a phase:
 - Use TypeScript throughout.
 - Use shadcn/ui for styling primitives with a dark, minimal, squared, cyberpunk-terminal visual direction.
 - Use TanStack where it improves structure or state management without adding unnecessary complexity.
+- Each phase must end in a testable or demoable product slice, not only internal scaffolding.
+- If infrastructure work is needed, it must land behind a visible workflow that the next agent or human can run and verify immediately.
 
 ## Phase Map
 

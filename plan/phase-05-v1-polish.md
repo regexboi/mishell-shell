@@ -21,6 +21,7 @@ Finish the product as a shippable V1 by tightening UX, quality, cross-platform b
 - Clean up migrations, configuration, scripts, and docs so the repo is understandable to future agents and human maintainers.
 - Verify that V1 success criteria from `spec.md` are met.
 - Explicitly leave V2 AI assistant work out of scope.
+- End the phase with a release-candidate-quality build and a concise verification checklist for the full V1 flow.
 
 ## Out of Scope
 
@@ -32,9 +33,11 @@ Finish the product as a shippable V1 by tightening UX, quality, cross-platform b
 - The repo is feature-complete for V1 as defined by `spec.md`.
 - The app feels polished enough to evaluate as a real product direction rather than a prototype skeleton.
 - The build, run, and verification paths are documented and usable.
+- A human can follow the docs, build the app, and walk through the main V1 flows without relying on tribal knowledge.
 
 ## Handoff Requirements
 
 - Write `plan/handoffs/phase-05.md`.
 - Summarize final V1 status, remaining non-blocking rough edges, and recommended next work after V1.
+- Include the final end-to-end smoke checklist used to validate V1.
 - Commit the phase before stopping.
