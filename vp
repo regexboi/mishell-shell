@@ -1,0 +1,26 @@
+#!/usr/bin/env sh
+set -eu
+
+if [ "$#" -eq 0 ]; then
+  echo "Usage: vp <install|dev|check|test|build|pack|run ...>" >&2
+  exit 1
+fi
+
+command="$1"
+shift || true
+
+case "$command" in
+  install)
+    exec pnpm install "$@"
+    ;;
+  dev|check|test|build|pack)
+    exec pnpm "$command" "$@"
+    ;;
+  run)
+    exec pnpm "$@"
+    ;;
+  *)
+    echo "Unknown vp command: $command" >&2
+    exit 1
+    ;;
+esac

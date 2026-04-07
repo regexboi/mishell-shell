@@ -1,0 +1,85 @@
+{
+  "name": "mishell-shell",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Polished cross-platform shell UI desktop app",
+  "type": "module",
+  "packageManager": "pnpm@10.17.1",
+  "main": "dist-electron/main.cjs",
+  "scripts": {
+    "dev": "concurrently -k \"pnpm dev:renderer\" \"pnpm dev:electron\" \"pnpm dev:app\"",
+    "dev:renderer": "vite --host 127.0.0.1 --port 5173",
+    "dev:electron": "tsup --watch",
+    "dev:app": "wait-on tcp:5173 file:dist-electron/main.cjs && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electronmon dist-electron/main.cjs",
+    "check": "pnpm check:types && pnpm check:lint",
+    "check:types": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
+    "check:lint": "oxlint .",
+    "test": "vitest run",
+    "build": "pnpm build:renderer && pnpm build:electron",
+    "build:renderer": "vite build",
+    "build:electron": "tsup",
+    "pack": "pnpm build && electron-builder --dir",
+    "run": "pnpm"
+  },
+  "build": {
+    "appId": "dev.mishell.shell",
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "buildResources": "assets"
+    }
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "electron",
+      "electron-winstaller",
+      "esbuild",
+      "node-pty"
+    ]
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.2.2",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.5.2",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "@vitejs/plugin-react-oxc": "^0.4.3",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron-builder": "^26.8.1",
+    "electronmon": "^2.0.4",
+    "oxlint": "^1.58.0",
+    "tailwindcss": "^4.2.2",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.2",
+    "vite": "^7.3.2",
+    "vitest": "^4.1.2",
+    "wait-on": "^9.0.4"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.2.7",
+    "@fontsource/space-grotesk": "^5.2.10",
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-scroll-area": "^1.2.10",
+    "@radix-ui/react-separator": "^1.1.8",
+    "@tanstack/react-query": "^5.96.2",
+    "@tanstack/react-router": "^1.168.10",
+    "better-sqlite3": "^12.8.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "electron": "^41.1.1",
+    "ghostty-web": "^0.4.0",
+    "lucide-react": "^1.7.0",
+    "node-pty": "^1.1.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "tailwind-merge": "^3.5.0",
+    "zod": "^4.3.6"
+  }
+}

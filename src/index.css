@@ -1,0 +1,51 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  --bg: #06060a;
+  --panel: rgba(13, 13, 18, 0.86);
+  --panel-muted: rgba(10, 10, 16, 0.8);
+  --panel-strong: rgba(18, 18, 24, 0.96);
+  --border: rgba(148, 148, 184, 0.16);
+  --border-strong: rgba(204, 153, 255, 0.38);
+  --accent: #d17bff;
+  --accent-dim: rgba(209, 123, 255, 0.42);
+  --text-primary: #f4ebff;
+  --text-secondary: rgba(221, 214, 255, 0.78);
+  --text-muted: rgba(179, 170, 209, 0.56);
+}
+
+@theme inline {
+  --font-display: "Space Grotesk", "Avenir Next", sans-serif;
+  --font-sans: "Space Grotesk", "Avenir Next", sans-serif;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", monospace;
+}
+
+@layer base {
+  * {
+    @apply border-[color:var(--border)];
+  }
+
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background:
+      linear-gradient(180deg, rgba(8, 8, 14, 0.98), rgba(4, 4, 8, 1)),
+      var(--bg);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  button,
+  input,
+  textarea {
+    font: inherit;
+  }
+}
