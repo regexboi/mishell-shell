@@ -1,6 +1,12 @@
 import { ipcMain } from "electron";
 
-import { bootstrapPayloadSchema, ipcChannels } from "@shared/contracts";
+import {
+  bootstrapPayloadSchema,
+  executionEventSchema,
+  ipcChannels,
+  runCommandRequestSchema,
+  runCommandResponseSchema,
+} from "@shared/contracts";
 
 import type { AppRuntime } from "../runtime";
 import { buildBootstrapPayload } from "../runtime";
@@ -8,5 +14,17 @@ import { buildBootstrapPayload } from "../runtime";
 export function registerAppIpc(runtime: AppRuntime) {
   ipcMain.handle(ipcChannels.getBootstrap, () => {
     return bootstrapPayloadSchema.parse(buildBootstrapPayload(runtime));
+  });
+
+  ipcMain.handle(ipcChannels.runCommand, async (event, input) => {
+    const request = runCommandRequestSchema.parse(input);
+    const response = await runtime.execution.runCommand(request, (executionEvent) => {
+      event.sender.send(
+        ipcChannels.executionEvent,
+        executionEventSchema.parse(executionEvent),
+      );
+    });
+
+    return runCommandResponseSchema.parse(response);
   });
 }

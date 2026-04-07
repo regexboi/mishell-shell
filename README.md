@@ -1,6 +1,6 @@
 # Mishell Shell
 
-Phase 1 foundation for the Electron-based custom shell UI described in [spec.md](./spec.md).
+Phase 2 execution UI for the Electron-based custom shell app described in [spec.md](./spec.md).
 
 ## Commands
 
@@ -24,11 +24,13 @@ Phase 1 foundation for the Electron-based custom shell UI described in [spec.md]
 - `src/shared/`
   IPC contracts and types shared between preload, main, and renderer.
 
-## Phase 1 Outcome
+## Phase 2 Outcome
 
-- Typed Electron main/preload/renderer boundary with a minimal secure `window.mishell` bridge
-- SQLite initialization plus a baseline `command_history` table and migration path
-- Launchable renderer shell scaffold with placeholder regions for editor, feed, history search, and terminal compatibility mode
+- Typed Electron main/preload/renderer boundary with a secure `window.mishell` bridge for bootstrap, command execution, execution events, and clipboard writes
+- PTY-backed shell execution in Electron main using `node-pty`, with command output streamed into structured renderer cards instead of a persistent raw terminal
+- SQLite command-history writes for command text, cwd, shell/session id, timing, exit code, output preview, and optional captured output file path
+- Custom highlighted shell editor with free cursor placement, `Enter` to run, `Shift+Enter` for multiline input, and copy/full-output actions on command cards
+- Starship-lite shell header showing cwd, shell, git branch, and recent exit/duration context
 - `vp` workflow wrapper over `pnpm` for install, dev, check, test, build, and pack
 - Native modules rebuild automatically for the right runtime:
   `./vp dev` and `./vp pack` rebuild for Electron, `./vp test` rebuilds for local Node.

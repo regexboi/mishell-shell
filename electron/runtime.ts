@@ -1,18 +1,38 @@
 import os from "node:os";
+import path from "node:path";
 
 import type { BootstrapPayload } from "@shared/contracts";
 
 import { initializeDatabase, type DatabaseContext } from "./db/database";
+import {
+  createExecutionService,
+  type ExecutionService,
+} from "./execution/execution-service";
 
 export type AppRuntime = {
   launchedAt: string;
   database: DatabaseContext;
+  execution: ExecutionService;
 };
 
 export function createAppRuntime(userDataPath: string): AppRuntime {
+  const shellExecutable =
+    process.env.SHELL ??
+    process.env.ComSpec ??
+    (process.platform === "win32"
+      ? "powershell.exe"
+      : os.userInfo().shell || "/bin/sh");
+  const database = initializeDatabase(userDataPath);
+
   return {
     launchedAt: new Date().toISOString(),
-    database: initializeDatabase(userDataPath),
+    database,
+    execution: createExecutionService({
+      database,
+      initialCwd: process.cwd(),
+      outputsDirectory: path.join(userDataPath, "command-output"),
+      shellExecutable,
+    }),
   };
 }
 
@@ -20,36 +40,28 @@ export function buildBootstrapPayload(runtime: AppRuntime): BootstrapPayload {
   return {
     appName: "Mishell",
     platform: `${process.platform}/${process.arch}`,
-    shell: {
-      executable:
-        process.env.SHELL ??
-        process.env.ComSpec ??
-        (process.platform === "win32"
-          ? "powershell.exe"
-          : os.userInfo().shell || "/bin/sh"),
-      cwd: process.cwd(),
-    },
+    shell: runtime.execution.getShellContext(),
     database: runtime.database.snapshot,
     surfaces: [
       {
         id: "editor",
         label: "Editor",
-        status: "ready",
+        status: "active",
         shortcut: "Enter",
         description:
-          "Primary command surface for composition, edits, and future inline completion.",
+          "Primary command surface for composition, edits, and PTY-backed execution.",
       },
       {
         id: "feed",
         label: "Result Feed",
-        status: "planned",
+        status: "ready",
         shortcut: "Tab",
         description: "Structured command cards replace traditional scrollback.",
       },
       {
         id: "history",
         label: "History Search",
-        status: "planned",
+        status: "standby",
         shortcut: "Cmd/Ctrl+R",
         description:
           "SQLite-backed history recall will surface command, cwd, timing, and exit metadata.",
@@ -68,7 +80,7 @@ export function buildBootstrapPayload(runtime: AppRuntime): BootstrapPayload {
       keyboardFirst: true,
     },
     release: {
-      stage: "phase-01-foundation",
+      stage: "phase-02-execution-ui",
       launchedAt: runtime.launchedAt,
     },
   };
