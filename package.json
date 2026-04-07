@@ -7,8 +7,13 @@
   "packageManager": "pnpm@10.17.1",
   "main": "dist-electron/main.cjs",
   "scripts": {
+    "postinstall": "pnpm rebuild:native",
+    "predev": "pnpm rebuild:native",
+    "pretest": "pnpm rebuild:node",
+    "rebuild:native": "electron-builder install-app-deps",
+    "rebuild:node": "pnpm rebuild better-sqlite3 node-pty",
     "dev": "concurrently -k \"pnpm dev:renderer\" \"pnpm dev:electron\" \"pnpm dev:app\"",
-    "dev:renderer": "vite --host 127.0.0.1 --port 5173",
+    "dev:renderer": "vite --host 127.0.0.1 --port 5173 --strictPort",
     "dev:electron": "tsup --watch",
     "dev:app": "wait-on tcp:5173 file:dist-electron/main.cjs && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electronmon dist-electron/main.cjs",
     "check": "pnpm check:types && pnpm check:lint",
@@ -18,7 +23,7 @@
     "build": "pnpm build:renderer && pnpm build:electron",
     "build:renderer": "vite build",
     "build:electron": "tsup",
-    "pack": "pnpm build && electron-builder --dir",
+    "pack": "pnpm rebuild:native && pnpm build && electron-builder --dir",
     "run": "pnpm"
   },
   "build": {
@@ -49,7 +54,6 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.2.0",
-    "@vitejs/plugin-react-oxc": "^0.4.3",
     "concurrently": "^9.2.1",
     "cross-env": "^10.1.0",
     "electron-builder": "^26.8.1",

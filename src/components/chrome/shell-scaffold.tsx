@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Command,
   Database,
@@ -53,6 +53,31 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const highlightedSurface = bootstrap.surfaces.find(
     (surface) => surface.id === bootstrap.focusMode.defaultSurface,
   );
+  const isBrowserPreview = bootstrap.platform === "browser-preview";
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const isHistoryShortcut =
+        (event.metaKey || event.ctrlKey) &&
+        event.key.toLowerCase() === "r" &&
+        !event.shiftKey &&
+        !event.altKey;
+
+      if (!isHistoryShortcut) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      setHistoryOpen(true);
+    };
+
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+    };
+  }, []);
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-[color:var(--bg)] text-[color:var(--text-primary)]">
@@ -68,6 +93,11 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                   Phase 01 Foundation
                 </span>
                 <span>{bootstrap.platform}</span>
+                {isBrowserPreview ? (
+                  <span className="border border-[color:var(--border-strong)] px-2 py-1 text-[color:var(--accent)]">
+                    Browser only
+                  </span>
+                ) : null}
               </div>
               <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
                 <h1 className="font-display text-4xl uppercase tracking-[0.26em] sm:text-5xl">
@@ -78,6 +108,12 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                   keeps execution, history, and TUI fallback isolated behind typed
                   Electron boundaries.
                 </p>
+                {isBrowserPreview ? (
+                  <p className="max-w-2xl text-xs uppercase tracking-[0.22em] text-[color:var(--accent)]">
+                    Preview fallback active. The real Electron window should show a
+                    platform like darwin/arm64 here.
+                  </p>
+                ) : null}
               </div>
             </div>
             <div className="grid gap-3 sm:grid-cols-3">
