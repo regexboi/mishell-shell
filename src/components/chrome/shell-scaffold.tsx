@@ -70,7 +70,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const [draft, setDraft] = useState("pwd");
   const [executions, setExecutions] = useState<CommandExecution[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [copyNotice, setCopyNotice] = useState<string | null>(null);
+  const [copyToast, setCopyToast] = useState<string | null>(null);
   const [fullOutputExecutionId, setFullOutputExecutionId] = useState<string | null>(
     null,
   );
@@ -162,18 +162,18 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   }, [handleHistoryShortcut]);
 
   useEffect(() => {
-    if (!copyNotice) {
+    if (!copyToast) {
       return;
     }
 
     const timeout = window.setTimeout(() => {
-      setCopyNotice(null);
+      setCopyToast(null);
     }, 1400);
 
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [copyNotice]);
+  }, [copyToast]);
 
   const submitCommand = useEffectEvent(async () => {
     const commandText = draft.trim();
@@ -219,9 +219,9 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const copyText = useEffectEvent(async (text: string, label: string) => {
     try {
       await api.clipboard.writeText(text);
-      setCopyNotice(`${label} copied`);
+      setCopyToast(`${label} copied`);
     } catch {
-      setCopyNotice(`Copy failed for ${label.toLowerCase()}`);
+      setCopyToast(`Copy failed for ${label.toLowerCase()}`);
     }
   });
 
@@ -250,11 +250,6 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                 {isBrowserPreview ? (
                   <span className="border border-[color:var(--border-strong)] px-2 py-1 text-[color:var(--accent)]">
                     Browser only
-                  </span>
-                ) : null}
-                {copyNotice ? (
-                  <span className="border border-[color:var(--border-strong)] px-2 py-1 text-[color:var(--accent)]">
-                    {copyNotice}
                   </span>
                 ) : null}
               </div>
@@ -440,7 +435,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                         }}
                         onCopyBoth={() => {
                           void copyText(
-                            `${execution.commandText}\n\n${execution.output}`,
+                            `cmd: ${execution.commandText}\nout: ${execution.output}`,
                             "Command + output",
                           );
                         }}
@@ -590,6 +585,12 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
           </div>
         </DialogContent>
       </Dialog>
+
+      {copyToast ? (
+        <div className="pointer-events-none fixed bottom-5 right-5 z-50 border border-[color:var(--border-strong)] bg-[color:var(--panel-strong)] px-4 py-3 text-[11px] uppercase tracking-[0.28em] text-[color:var(--accent)] shadow-[0_0_0_1px_rgba(195,115,255,0.12),0_20px_40px_rgba(0,0,0,0.4)]">
+          {copyToast}
+        </div>
+      ) : null}
     </div>
   );
 }

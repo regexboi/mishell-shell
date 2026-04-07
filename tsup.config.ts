@@ -9,6 +9,7 @@ export default defineConfig({
   platform: "node",
   target: "node20",
   external: ["electron"],
+  noExternal: ["zod"],
   outDir: "dist-electron",
   clean: true,
   sourcemap: true,

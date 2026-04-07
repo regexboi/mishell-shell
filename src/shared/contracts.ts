@@ -4,6 +4,7 @@ export const ipcChannels = {
   getBootstrap: "app:get-bootstrap",
   runCommand: "app:run-command",
   executionEvent: "app:execution-event",
+  writeClipboard: "app:write-clipboard",
 } as const;
 
 export const releaseStageSchema = z.enum([
@@ -53,6 +54,10 @@ export const runCommandRequestSchema = z.object({
 
 export const runCommandResponseSchema = z.object({
   executionId: z.string(),
+});
+
+export const writeClipboardRequestSchema = z.object({
+  text: z.string(),
 });
 
 export const commandExecutionSchema = z.object({

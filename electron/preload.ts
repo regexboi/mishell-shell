@@ -1,4 +1,4 @@
-import { clipboard, contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer } from "electron";
 
 import type { MishellApi } from "@shared/api";
 import {
@@ -34,7 +34,7 @@ const api: MishellApi = {
   },
   clipboard: {
     async writeText(text) {
-      clipboard.writeText(text);
+      await ipcRenderer.invoke(ipcChannels.writeClipboard, { text });
     },
   },
 };

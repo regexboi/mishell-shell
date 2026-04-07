@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { clipboard, ipcMain } from "electron";
 
 import {
   bootstrapPayloadSchema,
@@ -6,6 +6,7 @@ import {
   ipcChannels,
   runCommandRequestSchema,
   runCommandResponseSchema,
+  writeClipboardRequestSchema,
 } from "@shared/contracts";
 
 import type { AppRuntime } from "../runtime";
@@ -26,5 +27,10 @@ export function registerAppIpc(runtime: AppRuntime) {
     });
 
     return runCommandResponseSchema.parse(response);
+  });
+
+  ipcMain.handle(ipcChannels.writeClipboard, (_event, input) => {
+    const { text } = writeClipboardRequestSchema.parse(input);
+    clipboard.writeText(text);
   });
 }

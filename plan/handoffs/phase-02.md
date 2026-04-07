@@ -6,7 +6,8 @@
 - Added a PTY-backed execution service in Electron main using `node-pty`, with shell-specific wrappers that emit structured exit-code and cwd markers for the renderer pipeline.
 - Wired typed IPC for `app:run-command` plus streamed execution events from main to preload to renderer.
 - Persisted execution metadata into SQLite `command_history` rows on completion, including command text, cwd, shell, session id, timing, exit code, preview text, and output file path.
-- Added copy command/output/both actions and secure preload clipboard access.
+- Added copy command/output/both actions and follow-up copy UX fixes: clipboard writes now go through main-process IPC, copy confirmation uses a fixed toast instead of shifting the header, and `Copy both` now exports `cmd: ...` / `out: ...`.
+- Fixed the Electron dev preload path by bundling `zod` into the main/preload build output and adding explicit preload error logging in `electron/main.ts`.
 - Added coverage for command-history inserts plus execution-marker/output-preview parsing helpers.
 
 ## Key Decisions
@@ -15,6 +16,7 @@
 - Execution model: one PTY-backed shell process per submitted command, not a long-lived interactive shell session yet. Commands are still executed through the user shell, and the wrapper captures final exit code plus resulting cwd so `cd some-dir` updates the session cwd for the next command.
 - Shell context is maintained in Electron main as the source of truth. Renderer updates its header from completion events instead of inferring cwd or git state locally.
 - Full output is kept in renderer state for the current session and also written to a per-command log file path for future history/search work.
+- Clipboard writes are handled in Electron main via IPC instead of directly from the preload script. This is more resilient under the current sandboxed preload setup.
 
 ## Manual Test Path
 
@@ -26,6 +28,10 @@
 - Run `cd ..` and then `pwd` and verify the next command uses the updated cwd in both the header and the card.
 - Run a failing command such as `false` or `missing-command` and verify the card shows failure plus non-zero exit state.
 - Use `Copy command`, `Copy output`, and `Copy both` on a completed card.
+- Scroll down in the command feed, then use a copy action and verify the page does not jump back to the top.
+- Verify `Copy both` pastes in the format:
+  `cmd: <command>`
+  `out: <output>`
 - Open `Cmd/Ctrl+R` and verify the Phase 3 placeholder still opens while explaining that execution metadata is now being stored.
 
 ## Verification
@@ -40,6 +46,7 @@
 - TUI detection is still unimplemented. Full-screen interactive programs will currently run through the Phase 2 command path instead of switching to raw terminal mode.
 - Output streaming is renderer-local for the active session; Phase 3 will need explicit read/query surfaces if history search should reopen prior full outputs from disk.
 - The browser preview fallback is intentionally simulated and should not be used for validating the real PTY path.
+- Dev runs depend on the Electron preload bundle being rebuilt after config changes; if the app falls back to `browser-preview`, restart `./vp dev` and check for preload-error logs first.
 
 ## Notes for Next Phase
 

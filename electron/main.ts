@@ -32,6 +32,10 @@ async function createMainWindow() {
     await mainWindow.loadFile(path.join(__dirname, "..", "dist", "index.html"));
   }
 
+  mainWindow.webContents.on("preload-error", (_event, preloadPath, error) => {
+    console.error(`Preload failed at ${preloadPath}:`, error);
+  });
+
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
