@@ -61,10 +61,10 @@ export function buildBootstrapPayload(runtime: AppRuntime): BootstrapPayload {
       {
         id: "history",
         label: "History Search",
-        status: "standby",
+        status: "ready",
         shortcut: "Cmd/Ctrl+R",
         description:
-          "SQLite-backed history recall will surface command, cwd, timing, and exit metadata.",
+          "SQLite-backed recall, autocomplete, and scoped history now power daily command reuse.",
       },
       {
         id: "terminal",
@@ -80,7 +80,7 @@ export function buildBootstrapPayload(runtime: AppRuntime): BootstrapPayload {
       keyboardFirst: true,
     },
     release: {
-      stage: "phase-02-execution-ui",
+      stage: "phase-03-history-search",
       launchedAt: runtime.launchedAt,
     },
   };

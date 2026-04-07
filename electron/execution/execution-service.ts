@@ -9,13 +9,24 @@ import { spawn } from "node-pty";
 import type {
   CommandExecution,
   ExecutionEvent,
+  HistoryAutocompleteRequest,
+  HistoryAutocompleteResponse,
+  HistoryRecallRequest,
+  HistoryRecallResponse,
+  HistorySearchRequest,
+  HistorySearchResponse,
   RunCommandRequest,
   RunCommandResponse,
   ShellContext,
 } from "@shared/contracts";
 
 import type { DatabaseContext } from "../db/database";
-import { insertCommandHistory } from "../db/command-history";
+import {
+  insertCommandHistory,
+  queryHistoryAutocomplete,
+  queryHistoryRecall,
+  queryHistorySearch,
+} from "../db/command-history";
 
 type ShellFlavor = "cmd" | "fish" | "powershell" | "posix";
 
@@ -34,6 +45,11 @@ type ParsedExecutionOutput = {
 
 export type ExecutionService = {
   getShellContext: () => ShellContext;
+  getHistoryAutocomplete: (
+    input: HistoryAutocompleteRequest,
+  ) => HistoryAutocompleteResponse;
+  searchHistory: (input: HistorySearchRequest) => HistorySearchResponse;
+  getHistoryRecall: (input: HistoryRecallRequest) => HistoryRecallResponse;
   runCommand: (
     input: RunCommandRequest,
     emitEvent: (event: ExecutionEvent) => void,
@@ -53,6 +69,15 @@ export function createExecutionService(
   return {
     getShellContext() {
       return shellContext;
+    },
+    getHistoryAutocomplete(input) {
+      return queryHistoryAutocomplete(options.database.db, input);
+    },
+    searchHistory(input) {
+      return queryHistorySearch(options.database.db, input);
+    },
+    getHistoryRecall(input) {
+      return queryHistoryRecall(options.database.db, input);
     },
     async runCommand(input, emitEvent) {
       const executionId = randomUUID();

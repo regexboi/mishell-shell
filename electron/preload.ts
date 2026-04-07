@@ -4,6 +4,9 @@ import type { MishellApi } from "@shared/api";
 import {
   bootstrapPayloadSchema,
   executionEventSchema,
+  historyAutocompleteResponseSchema,
+  historyRecallResponseSchema,
+  historySearchResponseSchema,
   ipcChannels,
   runCommandResponseSchema,
 } from "@shared/contracts";
@@ -30,6 +33,26 @@ const api: MishellApi = {
       return () => {
         ipcRenderer.removeListener(ipcChannels.executionEvent, wrappedListener);
       };
+    },
+  },
+  history: {
+    async getAutocomplete(input) {
+      const response = await ipcRenderer.invoke(
+        ipcChannels.getHistoryAutocomplete,
+        input,
+      );
+
+      return historyAutocompleteResponseSchema.parse(response);
+    },
+    async search(input) {
+      const response = await ipcRenderer.invoke(ipcChannels.searchHistory, input);
+
+      return historySearchResponseSchema.parse(response);
+    },
+    async getRecall(input) {
+      const response = await ipcRenderer.invoke(ipcChannels.getHistoryRecall, input);
+
+      return historyRecallResponseSchema.parse(response);
     },
   },
   clipboard: {

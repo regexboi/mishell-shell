@@ -1,7 +1,14 @@
 import type { MishellApi } from "@shared/api";
-import type { ExecutionEvent, RunCommandRequest } from "@shared/contracts";
+import type {
+  ExecutionEvent,
+  HistoryAutocompleteItem,
+  HistoryEntry,
+  HistoryRecallItem,
+  RunCommandRequest,
+} from "@shared/contracts";
 
 const previewListeners = new Set<(event: ExecutionEvent) => void>();
+const previewHistory: HistoryEntry[] = [];
 
 const browserFallback: MishellApi = {
   app: {
@@ -39,9 +46,9 @@ const browserFallback: MishellApi = {
           {
             id: "history",
             label: "History Search",
-            status: "standby",
+            status: "ready",
             shortcut: "Cmd/Ctrl+R",
-            description: "SQLite-backed recall with cwd-aware ranking.",
+            description: "SQLite-backed recall, autocomplete, and cwd-aware search.",
           },
           {
             id: "terminal",
@@ -56,7 +63,7 @@ const browserFallback: MishellApi = {
           keyboardFirst: true,
         },
         release: {
-          stage: "phase-02-execution-ui",
+          stage: "phase-03-history-search",
           launchedAt: new Date().toISOString(),
         },
       };
@@ -122,6 +129,20 @@ const browserFallback: MishellApi = {
             },
           });
         });
+
+        previewHistory.unshift({
+          id: previewHistory.length + 1,
+          commandText: input.commandText,
+          cwd: "/workspace",
+          shell: "/bin/zsh",
+          sessionId: "browser-preview",
+          startedAt,
+          durationMs: 180,
+          exitCode: 0,
+          outputPreview: output,
+          outputPath: null,
+          cwdMatch: true,
+        });
       }, 180);
 
       return { executionId };
@@ -131,6 +152,111 @@ const browserFallback: MishellApi = {
 
       return () => {
         previewListeners.delete(listener);
+      };
+    },
+  },
+  history: {
+    async getAutocomplete(input) {
+      const normalizedDraft = input.draft.trim().toLocaleLowerCase();
+
+      const uniqueCommands = new Map<string, HistoryAutocompleteItem>();
+
+      for (const entry of previewHistory) {
+        const commandKey = entry.commandText.toLocaleLowerCase();
+
+        if (!commandKey.includes(normalizedDraft) || commandKey === normalizedDraft) {
+          continue;
+        }
+
+        if (uniqueCommands.has(commandKey)) {
+          continue;
+        }
+
+        uniqueCommands.set(commandKey, {
+          commandText: entry.commandText,
+          cwd: entry.cwd,
+          lastStartedAt: entry.startedAt,
+          usageCount: previewHistory.filter(
+            (candidate) =>
+              candidate.commandText.toLocaleLowerCase() === commandKey,
+          ).length,
+          lastExitCode: entry.exitCode,
+          outputPreview: entry.outputPreview,
+          cwdMatch: entry.cwd === input.cwd,
+        });
+      }
+
+      return {
+        items: [...uniqueCommands.values()]
+          .sort((left, right) => {
+            const leftPrefix = Number(
+              left.commandText.toLocaleLowerCase().startsWith(normalizedDraft),
+            );
+            const rightPrefix = Number(
+              right.commandText.toLocaleLowerCase().startsWith(normalizedDraft),
+            );
+
+            if (leftPrefix !== rightPrefix) {
+              return rightPrefix - leftPrefix;
+            }
+
+            if (left.cwdMatch !== right.cwdMatch) {
+              return Number(right.cwdMatch) - Number(left.cwdMatch);
+            }
+
+            return (
+              Date.parse(right.lastStartedAt) - Date.parse(left.lastStartedAt)
+            );
+          })
+          .slice(0, input.limit),
+      };
+    },
+    async search(input) {
+      const terms = input.query
+        .trim()
+        .toLocaleLowerCase()
+        .split(/\s+/)
+        .filter(Boolean);
+
+      return {
+        items: previewHistory
+          .filter((entry) => {
+            if (terms.length === 0) {
+              return true;
+            }
+
+            const haystack = `${entry.commandText}\n${entry.cwd}`.toLocaleLowerCase();
+
+            return terms.every((term) => haystack.includes(term));
+          })
+          .map((entry) => ({
+            ...entry,
+            cwdMatch: entry.cwd === input.cwd,
+          }))
+          .sort((left, right) => {
+            if (left.cwdMatch !== right.cwdMatch) {
+              return Number(right.cwdMatch) - Number(left.cwdMatch);
+            }
+
+            return Date.parse(right.startedAt) - Date.parse(left.startedAt);
+          })
+          .slice(0, input.limit),
+      };
+    },
+    async getRecall(input) {
+      return {
+        items: previewHistory
+          .filter((entry) => entry.cwd === input.cwd)
+          .slice(0, input.limit)
+          .map(
+            (entry): HistoryRecallItem => ({
+              id: entry.id,
+              commandText: entry.commandText,
+              startedAt: entry.startedAt,
+              durationMs: entry.durationMs,
+              exitCode: entry.exitCode,
+            }),
+          ),
       };
     },
   },
