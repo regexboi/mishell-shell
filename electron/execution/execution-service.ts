@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { spawn } from "node-pty";
+import { spawn, type IPty } from "node-pty";
 
 import type {
   CommandExecution,
@@ -18,6 +18,8 @@ import type {
   RunCommandRequest,
   RunCommandResponse,
   ShellContext,
+  TerminalInputRequest,
+  TerminalResizeRequest,
 } from "@shared/contracts";
 
 import type { DatabaseContext } from "../db/database";
@@ -43,6 +45,13 @@ type ParsedExecutionOutput = {
   output: string;
 };
 
+type ActiveTerminalExecution = {
+  child: IPty;
+  cwdCapturePath: string;
+  transcriptPath: string;
+  transcriptStream: fs.WriteStream;
+};
+
 export type ExecutionService = {
   getShellContext: () => ShellContext;
   getHistoryAutocomplete: (
@@ -54,7 +63,60 @@ export type ExecutionService = {
     input: RunCommandRequest,
     emitEvent: (event: ExecutionEvent) => void,
   ) => Promise<RunCommandResponse>;
+  writeTerminalInput: (input: TerminalInputRequest) => void;
+  resizeTerminal: (input: TerminalResizeRequest) => void;
+  dispose: () => void;
 };
+
+const TERMINAL_MODE_COMMANDS = new Set([
+  "bash",
+  "btop",
+  "claude",
+  "cmd",
+  "cmd.exe",
+  "codex",
+  "fish",
+  "fzf",
+  "gitui",
+  "htop",
+  "k9s",
+  "lazydocker",
+  "lazygit",
+  "less",
+  "man",
+  "more",
+  "nano",
+  "nvim",
+  "powershell",
+  "powershell.exe",
+  "pwsh",
+  "pwsh.exe",
+  "screen",
+  "ssh",
+  "tig",
+  "tmux",
+  "top",
+  "vi",
+  "vim",
+  "watch",
+  "zsh",
+]);
+
+const NON_INTERACTIVE_FLAGS = new Set([
+  "--help",
+  "--version",
+  "-h",
+  "-v",
+  "-V",
+]);
+
+const LEADING_COMMAND_WRAPPERS = new Set([
+  "builtin",
+  "command",
+  "exec",
+  "nohup",
+  "time",
+]);
 
 export function createExecutionService(
   options: ExecutionServiceOptions,
@@ -65,6 +127,265 @@ export function createExecutionService(
     cwd: options.initialCwd,
     executable: options.shellExecutable,
   });
+  const activeTerminalExecutions = new Map<string, ActiveTerminalExecution>();
+
+  const finalizeExecution = ({
+    baseExecution,
+    exitCode,
+    output,
+    cwd,
+    outputPath,
+    emitEvent,
+  }: {
+    baseExecution: CommandExecution;
+    exitCode: number | null;
+    output: string;
+    cwd: string;
+    outputPath: string | null;
+    emitEvent: (event: ExecutionEvent) => void;
+  }) => {
+    const finishedAt = new Date().toISOString();
+    const durationMs = Math.max(
+      0,
+      Date.parse(finishedAt) - Date.parse(baseExecution.startedAt),
+    );
+    const finalExitCode = exitCode ?? 1;
+    const execution: CommandExecution = {
+      ...baseExecution,
+      finishedAt,
+      status: finalExitCode === 0 ? "succeeded" : "failed",
+      durationMs,
+      exitCode: finalExitCode,
+      outputPreview: baseExecution.presentation === "terminal"
+        ? output
+        : createOutputPreview(output),
+      output: baseExecution.presentation === "terminal" ? "" : output,
+      outputPath,
+    };
+
+    shellContext = buildShellContext({
+      cwd,
+      executable: shellContext.executable,
+      sessionId: shellContext.sessionId,
+    });
+
+    insertCommandHistory(options.database.db, {
+      commandText: execution.commandText,
+      cwd: execution.cwd,
+      shell: execution.shell,
+      sessionId: shellContext.sessionId,
+      startedAt: execution.startedAt,
+      durationMs: execution.durationMs,
+      exitCode: execution.exitCode,
+      outputPreview: execution.outputPreview,
+      outputPath: execution.outputPath,
+    });
+
+    emitEvent({
+      type: "completed",
+      execution,
+      shellContext,
+    });
+  };
+
+  const startCardExecution = (
+    input: RunCommandRequest,
+    emitEvent: (event: ExecutionEvent) => void,
+  ): RunCommandResponse => {
+    const executionId = randomUUID();
+    const marker = `__MISHELL_${executionId.replaceAll("-", "_")}__`;
+    const baseExecution = buildExecution({
+      executionId,
+      commandText: input.commandText,
+      presentation: "card",
+      shellContext,
+    });
+
+    emitEvent({
+      type: "started",
+      execution: baseExecution,
+    });
+
+    let rawOutput = "";
+    let finished = false;
+
+    const complete = (result: {
+      exitCode: number | null;
+      output: string;
+      cwd: string;
+    }) => {
+      if (finished) {
+        return;
+      }
+
+      finished = true;
+
+      const normalizedOutput = normalizeOutput(result.output);
+      const outputPath =
+        normalizedOutput.trim().length > 0
+          ? writeOutputFile(options.outputsDirectory, executionId, normalizedOutput)
+          : null;
+
+      finalizeExecution({
+        baseExecution,
+        exitCode: result.exitCode,
+        output: normalizedOutput,
+        cwd: result.cwd,
+        outputPath,
+        emitEvent,
+      });
+    };
+
+    try {
+      const child = spawn(
+        shellContext.executable,
+        buildCardShellArguments(shellContext.executable),
+        {
+          name: "xterm-256color",
+          cols: 120,
+          rows: 40,
+          cwd: shellContext.cwd,
+          env: buildShellEnvironment({
+            commandText: input.commandText,
+            marker,
+          }),
+        },
+      );
+
+      child.onData((chunk) => {
+        rawOutput += chunk;
+
+        emitEvent({
+          type: "output",
+          executionId,
+          chunk,
+          target: "card",
+        });
+      });
+
+      child.onExit(({ exitCode }) => {
+        const parsedOutput = parseExecutionOutput(rawOutput, marker);
+
+        complete({
+          exitCode: parsedOutput.exitCode ?? exitCode,
+          output: parsedOutput.output,
+          cwd: parsedOutput.cwd ?? shellContext.cwd,
+        });
+      });
+    } catch (error) {
+      complete({
+        exitCode: 1,
+        output:
+          error instanceof Error
+            ? `Mishell failed to start the shell: ${error.message}`
+            : "Mishell failed to start the shell.",
+        cwd: shellContext.cwd,
+      });
+    }
+
+    return {
+      executionId,
+      mode: "card",
+    };
+  };
+
+  const startTerminalExecution = (
+    input: RunCommandRequest,
+    emitEvent: (event: ExecutionEvent) => void,
+  ): RunCommandResponse => {
+    const executionId = randomUUID();
+    const cwdCapturePath = path.join(
+      options.outputsDirectory,
+      `${executionId}.cwd`,
+    );
+    const transcriptPath = path.join(
+      options.outputsDirectory,
+      `${executionId}.pty.log`,
+    );
+    const baseExecution = buildExecution({
+      executionId,
+      commandText: input.commandText,
+      presentation: "terminal",
+      shellContext,
+      output:
+        "Terminal mode attached. Focus the compatibility surface and use Ctrl+C when the active program accepts it.",
+    });
+
+    emitEvent({
+      type: "started",
+      execution: baseExecution,
+    });
+
+    try {
+      const transcriptStream = fs.createWriteStream(transcriptPath, {
+        flags: "a",
+        encoding: "utf8",
+      });
+      const child = spawn(
+        shellContext.executable,
+        buildTerminalShellArguments(shellContext.executable),
+        {
+          name: "xterm-256color",
+          cols: 120,
+          rows: 40,
+          cwd: shellContext.cwd,
+          env: buildShellEnvironment({
+            commandText: input.commandText,
+            cwdCapturePath,
+          }),
+        },
+      );
+
+      activeTerminalExecutions.set(executionId, {
+        child,
+        cwdCapturePath,
+        transcriptPath,
+        transcriptStream,
+      });
+
+      child.onData((chunk) => {
+        transcriptStream.write(chunk);
+
+        emitEvent({
+          type: "output",
+          executionId,
+          chunk,
+          target: "terminal",
+        });
+      });
+
+      child.onExit(({ exitCode }) => {
+        finishTerminalExecution({
+          executionId,
+          exitCode,
+          activeTerminalExecutions,
+          baseExecution,
+          emitEvent,
+          finalizeExecution,
+          currentCwd: shellContext.cwd,
+        });
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? `Mishell failed to start terminal mode: ${error.message}`
+          : "Mishell failed to start terminal mode.";
+
+      finalizeExecution({
+        baseExecution,
+        exitCode: 1,
+        output: message,
+        cwd: shellContext.cwd,
+        outputPath: null,
+        emitEvent,
+      });
+    }
+
+    return {
+      executionId,
+      mode: "terminal",
+    };
+  };
 
   return {
     getShellContext() {
@@ -80,147 +401,114 @@ export function createExecutionService(
       return queryHistoryRecall(options.database.db, input);
     },
     async runCommand(input, emitEvent) {
-      const executionId = randomUUID();
-      const marker = `__MISHELL_${executionId.replaceAll("-", "_")}__`;
-      const startedAt = new Date().toISOString();
-      const baseExecution: CommandExecution = {
-        id: executionId,
-        commandText: input.commandText,
-        cwd: shellContext.cwd,
-        shell: shellContext.executable,
-        startedAt,
-        finishedAt: null,
-        status: "running",
-        durationMs: null,
-        exitCode: null,
-        outputPreview: "",
-        output: "",
-        outputPath: null,
-      };
-
-      emitEvent({
-        type: "started",
-        execution: baseExecution,
-      });
-
-      return new Promise<RunCommandResponse>((resolve) => {
-        let rawOutput = "";
-        let finished = false;
-
-        const complete = (result: {
-          exitCode: number | null;
-          output: string;
-          cwd: string;
-        }) => {
-          if (finished) {
-            return;
-          }
-
-          finished = true;
-
-          const finishedAt = new Date().toISOString();
-          const durationMs = Math.max(
-            0,
-            Date.parse(finishedAt) - Date.parse(baseExecution.startedAt),
-          );
-          const normalizedOutput = normalizeOutput(result.output);
-          const outputPreview = createOutputPreview(normalizedOutput);
-          const outputPath =
-            normalizedOutput.trim().length > 0
-              ? writeOutputFile(
-                  options.outputsDirectory,
-                  executionId,
-                  normalizedOutput,
-                )
-              : null;
-          const finalExitCode = result.exitCode ?? 1;
-          const execution: CommandExecution = {
-            ...baseExecution,
-            finishedAt,
-            status: finalExitCode === 0 ? "succeeded" : "failed",
-            durationMs,
-            exitCode: finalExitCode,
-            outputPreview,
-            output: normalizedOutput,
-            outputPath,
-          };
-
-          shellContext = buildShellContext({
-            cwd: result.cwd,
-            executable: shellContext.executable,
-            sessionId: shellContext.sessionId,
-          });
-
-          insertCommandHistory(options.database.db, {
-            commandText: execution.commandText,
-            cwd: execution.cwd,
-            shell: execution.shell,
-            sessionId: shellContext.sessionId,
-            startedAt: execution.startedAt,
-            durationMs: execution.durationMs,
-            exitCode: execution.exitCode,
-            outputPreview: execution.outputPreview,
-            outputPath: execution.outputPath,
-          });
-
-          emitEvent({
-            type: "completed",
-            execution,
-            shellContext,
-          });
-
-          resolve({
-            executionId,
-          });
-        };
-
-        try {
-          const child = spawn(
-            shellContext.executable,
-            buildShellArguments(shellContext.executable),
-            {
-              name: "xterm-256color",
-              cols: 120,
-              rows: 40,
-              cwd: shellContext.cwd,
-              env: buildShellEnvironment({
-                commandText: input.commandText,
-                marker,
-              }),
-            },
-          );
-
-          child.onData((chunk) => {
-            rawOutput += chunk;
-
-            emitEvent({
-              type: "output",
-              executionId,
-              chunk,
-            });
-          });
-
-          child.onExit(({ exitCode }) => {
-            const parsedOutput = parseExecutionOutput(rawOutput, marker);
-
-            complete({
-              exitCode: parsedOutput.exitCode ?? exitCode,
-              output: parsedOutput.output,
-              cwd: parsedOutput.cwd ?? shellContext.cwd,
-            });
-          });
-        } catch (error) {
-          complete({
-            exitCode: 1,
-            output:
-              error instanceof Error
-                ? `Mishell failed to start the shell: ${error.message}`
-                : "Mishell failed to start the shell.",
-            cwd: shellContext.cwd,
-          });
-        }
-      });
+      return shouldUseTerminalMode(input.commandText)
+        ? startTerminalExecution(input, emitEvent)
+        : startCardExecution(input, emitEvent);
     },
+    writeTerminalInput(input) {
+      activeTerminalExecutions.get(input.executionId)?.child.write(input.data);
+    },
+    resizeTerminal(input) {
+      activeTerminalExecutions.get(input.executionId)?.child.resize(
+        input.cols,
+        input.rows,
+      );
+    },
+    dispose() {
+      for (const activeExecution of activeTerminalExecutions.values()) {
+        activeExecution.child.kill();
+        activeExecution.transcriptStream.destroy();
+      }
+
+      activeTerminalExecutions.clear();
+    },
+  };
+}
+
+type FinalizeExecution = (args: {
+  baseExecution: CommandExecution;
+  exitCode: number | null;
+  output: string;
+  cwd: string;
+  outputPath: string | null;
+  emitEvent: (event: ExecutionEvent) => void;
+}) => void;
+
+function finishTerminalExecution({
+  executionId,
+  exitCode,
+  activeTerminalExecutions,
+  baseExecution,
+  emitEvent,
+  finalizeExecution,
+  currentCwd,
+}: {
+  executionId: string;
+  exitCode: number;
+  activeTerminalExecutions: Map<string, ActiveTerminalExecution>;
+  baseExecution: CommandExecution;
+  emitEvent: (event: ExecutionEvent) => void;
+  finalizeExecution: FinalizeExecution;
+  currentCwd: string;
+}) {
+  const activeExecution = activeTerminalExecutions.get(executionId);
+
+  if (!activeExecution) {
+    return;
+  }
+
+  activeTerminalExecutions.delete(executionId);
+
+  activeExecution.transcriptStream.end(() => {
+    const nextCwd = readRecordedCwd(activeExecution.cwdCapturePath) ?? currentCwd;
+    const transcriptSize = readFileSize(activeExecution.transcriptPath);
+    const outputPath =
+      transcriptSize > 0 ? activeExecution.transcriptPath : null;
+
+    if (!outputPath) {
+      fs.rmSync(activeExecution.transcriptPath, { force: true });
+    }
+
+    fs.rmSync(activeExecution.cwdCapturePath, { force: true });
+
+    finalizeExecution({
+      baseExecution,
+      exitCode,
+      output: createTerminalSummary(exitCode),
+      cwd: nextCwd,
+      outputPath,
+      emitEvent,
+    });
+  });
+}
+
+function buildExecution({
+  executionId,
+  commandText,
+  presentation,
+  shellContext,
+  output = "",
+}: {
+  executionId: string;
+  commandText: string;
+  presentation: "card" | "terminal";
+  shellContext: ShellContext;
+  output?: string;
+}): CommandExecution {
+  return {
+    id: executionId,
+    presentation,
+    commandText,
+    cwd: shellContext.cwd,
+    shell: shellContext.executable,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    status: "running",
+    durationMs: null,
+    exitCode: null,
+    outputPreview: "",
+    output,
+    outputPath: null,
   };
 }
 
@@ -237,7 +525,10 @@ export function parseExecutionOutput(
   );
 
   const cleaned = normalized
-    .replace(new RegExp(`\\n?${escapeRegExp(marker)}EXIT_CODE=-?\\d+\\n?`, "g"), "\n")
+    .replace(
+      new RegExp(`\\n?${escapeRegExp(marker)}EXIT_CODE=-?\\d+\\n?`, "g"),
+      "\n",
+    )
     .replace(new RegExp(`\\n?${escapeRegExp(marker)}CWD=.+\\n?`, "g"), "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trimEnd();
@@ -266,6 +557,22 @@ export function createOutputPreview(output: string) {
   return `${preview.slice(0, 640).trimEnd()}\n…`;
 }
 
+export function shouldUseTerminalMode(commandText: string) {
+  const tokens = tokenizeCommand(commandText);
+
+  if (tokens.length === 0) {
+    return false;
+  }
+
+  const { command, remaining } = extractPrimaryCommand(tokens);
+
+  if (!command || !TERMINAL_MODE_COMMANDS.has(command)) {
+    return false;
+  }
+
+  return !remaining.some((token) => NON_INTERACTIVE_FLAGS.has(token));
+}
+
 function buildShellContext({
   cwd,
   executable,
@@ -288,18 +595,21 @@ function buildShellContext({
 function buildShellEnvironment({
   commandText,
   marker,
+  cwdCapturePath,
 }: {
   commandText: string;
-  marker: string;
+  marker?: string;
+  cwdCapturePath?: string;
 }) {
   return {
     ...process.env,
     MISHELL_COMMAND: commandText,
-    MISHELL_MARKER: marker,
+    ...(marker ? { MISHELL_MARKER: marker } : {}),
+    ...(cwdCapturePath ? { MISHELL_CWD_FILE: cwdCapturePath } : {}),
   };
 }
 
-function buildShellArguments(executable: string) {
+function buildCardShellArguments(executable: string) {
   const flavor = detectShellFlavor(executable);
 
   if (flavor === "powershell") {
@@ -357,6 +667,63 @@ function buildShellArguments(executable: string) {
       "mishell_exit=$?",
       'printf "\\n%sEXIT_CODE=%s\\n" "$MISHELL_MARKER" "$mishell_exit"',
       'printf "%sCWD=%s\\n" "$MISHELL_MARKER" "$PWD"',
+      'exit "$mishell_exit"',
+    ].join("; "),
+  ];
+}
+
+function buildTerminalShellArguments(executable: string) {
+  const flavor = detectShellFlavor(executable);
+
+  if (flavor === "powershell") {
+    return [
+      "-NoLogo",
+      "-NoProfile",
+      "-Command",
+      [
+        '$ErrorActionPreference = "Continue"',
+        "Invoke-Expression $env:MISHELL_COMMAND",
+        "$mishellSucceeded = $?",
+        "$mishellExit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } elseif ($mishellSucceeded) { 0 } else { 1 }",
+        'Set-Content -LiteralPath $env:MISHELL_CWD_FILE -Value (Get-Location).Path -NoNewline',
+        "exit $mishellExit",
+      ].join("; "),
+    ];
+  }
+
+  if (flavor === "cmd") {
+    return [
+      "/d",
+      "/v:on",
+      "/s",
+      "/c",
+      [
+        "call %MISHELL_COMMAND%",
+        "set MISHELL_EXIT=!ERRORLEVEL!",
+        'cd > "%MISHELL_CWD_FILE%"',
+        "exit /b !MISHELL_EXIT!",
+      ].join(" & "),
+    ];
+  }
+
+  if (flavor === "fish") {
+    return [
+      "-c",
+      [
+        'eval "$MISHELL_COMMAND"',
+        "set mishell_exit $status",
+        'pwd > "$MISHELL_CWD_FILE"',
+        "exit $mishell_exit",
+      ].join("; "),
+    ];
+  }
+
+  return [
+    "-lc",
+    [
+      'eval "$MISHELL_COMMAND"',
+      "mishell_exit=$?",
+      'pwd > "$MISHELL_CWD_FILE"',
       'exit "$mishell_exit"',
     ].join("; "),
   ];
@@ -426,6 +793,162 @@ function writeOutputFile(
   const outputPath = path.join(outputsDirectory, `${executionId}.log`);
   fs.writeFileSync(outputPath, output, "utf8");
   return outputPath;
+}
+
+function createTerminalSummary(exitCode: number) {
+  return exitCode === 0
+    ? "Interactive session completed and returned to the shell UI."
+    : `Interactive session exited with code ${exitCode}.`;
+}
+
+function readRecordedCwd(cwdCapturePath: string) {
+  if (!fs.existsSync(cwdCapturePath)) {
+    return null;
+  }
+
+  const recorded = fs.readFileSync(cwdCapturePath, "utf8").trim();
+
+  return recorded.length > 0 ? recorded : null;
+}
+
+function readFileSize(filePath: string) {
+  if (!fs.existsSync(filePath)) {
+    return 0;
+  }
+
+  return fs.statSync(filePath).size;
+}
+
+function tokenizeCommand(commandText: string) {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | null = null;
+  let escaping = false;
+
+  for (const character of commandText) {
+    if (escaping) {
+      current += character;
+      escaping = false;
+      continue;
+    }
+
+    if (character === "\\") {
+      escaping = quote === "'" ? false : true;
+
+      if (!escaping) {
+        current += character;
+      }
+      continue;
+    }
+
+    if (quote) {
+      if (character === quote) {
+        quote = null;
+      } else {
+        current += character;
+      }
+      continue;
+    }
+
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+
+    if (/\s/.test(character)) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+
+    current += character;
+  }
+
+  if (current) {
+    tokens.push(current);
+  }
+
+  return tokens;
+}
+
+function extractPrimaryCommand(tokens: string[]) {
+  let index = 0;
+
+  while (tokens[index] && isEnvAssignment(tokens[index]!)) {
+    index += 1;
+  }
+
+  while (tokens[index]) {
+    const token = tokens[index]!.toLowerCase();
+
+    if (token === "sudo") {
+      index += 1;
+
+      while (
+        tokens[index] &&
+        tokens[index] !== "--" &&
+        tokens[index]!.startsWith("-")
+      ) {
+        index += 1;
+      }
+
+      if (tokens[index] === "--") {
+        index += 1;
+      }
+
+      continue;
+    }
+
+    if (token === "env") {
+      index += 1;
+
+      while (tokens[index]) {
+        if (tokens[index] === "--") {
+          index += 1;
+          break;
+        }
+
+        if (
+          tokens[index]!.startsWith("-") ||
+          isEnvAssignment(tokens[index]!)
+        ) {
+          index += 1;
+          continue;
+        }
+
+        break;
+      }
+
+      continue;
+    }
+
+    if (LEADING_COMMAND_WRAPPERS.has(token)) {
+      index += 1;
+      continue;
+    }
+
+    const commandToken = tokens[index]!;
+    const normalizedCommand = commandToken
+      .split(/[\\/]/)
+      .pop()
+      ?.toLowerCase();
+
+    return {
+      command: normalizedCommand ?? null,
+      remaining: tokens.slice(index + 1).map((value) => value.toLowerCase()),
+    };
+  }
+
+  return {
+    command: null,
+    remaining: [],
+  };
+}
+
+function isEnvAssignment(token: string) {
+  return /^[A-Za-z_][A-Za-z0-9_]*=.*$/.test(token);
 }
 
 function escapeRegExp(value: string) {

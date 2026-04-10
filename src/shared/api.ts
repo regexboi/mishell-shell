@@ -9,12 +9,16 @@ import type {
   HistorySearchResponse,
   RunCommandRequest,
   RunCommandResponse,
+  TerminalInputRequest,
+  TerminalResizeRequest,
 } from "./contracts";
 
 export interface MishellApi {
   app: {
     getBootstrap: () => Promise<BootstrapPayload>;
     runCommand: (input: RunCommandRequest) => Promise<RunCommandResponse>;
+    writeTerminalInput: (input: TerminalInputRequest) => Promise<void>;
+    resizeTerminal: (input: TerminalResizeRequest) => Promise<void>;
     onExecutionEvent: (listener: (event: ExecutionEvent) => void) => () => void;
   };
   history: {

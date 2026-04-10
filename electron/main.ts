@@ -65,5 +65,6 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  runtime?.execution.dispose();
   runtime?.database.db.close();
 });

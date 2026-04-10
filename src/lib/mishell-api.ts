@@ -53,7 +53,7 @@ const browserFallback: MishellApi = {
           {
             id: "terminal",
             label: "Terminal Mode",
-            status: "standby",
+            status: "ready",
             shortcut: "Ctrl+C",
             description: "Compatibility fallback for full-screen TUIs.",
           },
@@ -63,7 +63,7 @@ const browserFallback: MishellApi = {
           keyboardFirst: true,
         },
         release: {
-          stage: "phase-03-history-search",
+          stage: "phase-04-terminal-mode",
           launchedAt: new Date().toISOString(),
         },
       };
@@ -71,6 +71,7 @@ const browserFallback: MishellApi = {
     async runCommand(input: RunCommandRequest) {
       const executionId = `preview-${crypto.randomUUID()}`;
       const startedAt = new Date().toISOString();
+      const interactive = shouldPreviewUseTerminalMode(input.commandText);
 
       queueMicrotask(() => {
         previewListeners.forEach((listener) => {
@@ -78,6 +79,7 @@ const browserFallback: MishellApi = {
             type: "started",
             execution: {
               id: executionId,
+              presentation: interactive ? "terminal" : "card",
               commandText: input.commandText,
               cwd: "/workspace",
               shell: "/bin/zsh",
@@ -87,16 +89,39 @@ const browserFallback: MishellApi = {
               durationMs: null,
               exitCode: null,
               outputPreview: "",
-              output: "",
+              output: interactive
+                ? "Preview terminal mode attached. Launch Electron for the real PTY-backed compatibility flow."
+                : "",
               outputPath: null,
             },
           });
         });
       });
 
+      if (interactive) {
+        window.setTimeout(() => {
+          previewListeners.forEach((listener) => {
+            listener({
+              type: "output",
+              executionId,
+              chunk: [
+                "\u001b[2J\u001b[Hmishell preview terminal mode",
+                "",
+                `$ ${input.commandText}`,
+                "Interactive apps attach here in the Electron build.",
+                "",
+              ].join("\r\n"),
+              target: "terminal",
+            });
+          });
+        }, 80);
+      }
+
       window.setTimeout(() => {
         const output = [
-          "Browser preview fallback",
+          interactive
+            ? "Interactive session returned to the shell UI."
+            : "Browser preview fallback",
           "",
           `Command: ${input.commandText}`,
           "Launch the Electron window for the real PTY-backed path.",
@@ -107,6 +132,7 @@ const browserFallback: MishellApi = {
             type: "completed",
             execution: {
               id: executionId,
+              presentation: interactive ? "terminal" : "card",
               commandText: input.commandText,
               cwd: "/workspace",
               shell: "/bin/zsh",
@@ -116,7 +142,7 @@ const browserFallback: MishellApi = {
               durationMs: 180,
               exitCode: 0,
               outputPreview: output,
-              output,
+              output: interactive ? "" : output,
               outputPath: null,
             },
             shellContext: {
@@ -145,7 +171,13 @@ const browserFallback: MishellApi = {
         });
       }, 180);
 
-      return { executionId };
+      return { executionId, mode: interactive ? "terminal" : "card" };
+    },
+    async writeTerminalInput() {
+      return;
+    },
+    async resizeTerminal() {
+      return;
     },
     onExecutionEvent(listener) {
       previewListeners.add(listener);
@@ -269,4 +301,10 @@ const browserFallback: MishellApi = {
 
 export function getMishellApi(): MishellApi {
   return window.mishell ?? browserFallback;
+}
+
+function shouldPreviewUseTerminalMode(commandText: string) {
+  return /(^|\s)(codex|lazygit|vim|nvim|vi|less|man|ssh|tmux|top|htop|btop|nano)(\s|$)/i.test(
+    commandText,
+  );
 }

@@ -69,7 +69,7 @@ export function buildBootstrapPayload(runtime: AppRuntime): BootstrapPayload {
       {
         id: "terminal",
         label: "Terminal Mode",
-        status: "standby",
+        status: "ready",
         shortcut: "Ctrl+C",
         description:
           "Full-screen TUIs will use a dedicated compatibility surface instead of the default UI.",
@@ -80,7 +80,7 @@ export function buildBootstrapPayload(runtime: AppRuntime): BootstrapPayload {
       keyboardFirst: true,
     },
     release: {
-      stage: "phase-03-history-search",
+      stage: "phase-04-terminal-mode",
       launchedAt: runtime.launchedAt,
     },
   };

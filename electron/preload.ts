@@ -9,6 +9,8 @@ import {
   historySearchResponseSchema,
   ipcChannels,
   runCommandResponseSchema,
+  terminalInputRequestSchema,
+  terminalResizeRequestSchema,
 } from "@shared/contracts";
 
 const api: MishellApi = {
@@ -22,6 +24,18 @@ const api: MishellApi = {
       const response = await ipcRenderer.invoke(ipcChannels.runCommand, input);
 
       return runCommandResponseSchema.parse(response);
+    },
+    async writeTerminalInput(input) {
+      await ipcRenderer.invoke(
+        ipcChannels.writeTerminalInput,
+        terminalInputRequestSchema.parse(input),
+      );
+    },
+    async resizeTerminal(input) {
+      await ipcRenderer.invoke(
+        ipcChannels.resizeTerminal,
+        terminalResizeRequestSchema.parse(input),
+      );
     },
     onExecutionEvent(listener) {
       const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   createOutputPreview,
   parseExecutionOutput,
+  shouldUseTerminalMode,
 } from "./execution-service";
 
 describe("parseExecutionOutput", () => {
@@ -37,5 +38,19 @@ describe("createOutputPreview", () => {
     expect(createOutputPreview(output)).toBe(
       "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\n…",
     );
+  });
+});
+
+describe("shouldUseTerminalMode", () => {
+  it("routes known interactive tools into terminal mode", () => {
+    expect(shouldUseTerminalMode("vim README.md")).toBe(true);
+    expect(shouldUseTerminalMode("sudo lazygit")).toBe(true);
+    expect(shouldUseTerminalMode("FOO=1 env BAR=2 codex")).toBe(true);
+  });
+
+  it("keeps normal commands on the card path", () => {
+    expect(shouldUseTerminalMode("pnpm check")).toBe(false);
+    expect(shouldUseTerminalMode("git status --short")).toBe(false);
+    expect(shouldUseTerminalMode("vim --help")).toBe(false);
   });
 });

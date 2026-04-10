@@ -4,6 +4,8 @@ export const ipcChannels = {
   getBootstrap: "app:get-bootstrap",
   runCommand: "app:run-command",
   executionEvent: "app:execution-event",
+  writeTerminalInput: "terminal:write-input",
+  resizeTerminal: "terminal:resize",
   writeClipboard: "app:write-clipboard",
   getHistoryAutocomplete: "history:get-autocomplete",
   searchHistory: "history:search",
@@ -14,7 +16,10 @@ export const releaseStageSchema = z.enum([
   "phase-01-foundation",
   "phase-02-execution-ui",
   "phase-03-history-search",
+  "phase-04-terminal-mode",
 ]);
+
+export const commandPresentationSchema = z.enum(["card", "terminal"]);
 
 export const shellSurfaceSchema = z.object({
   id: z.enum(["editor", "feed", "history", "terminal"]),
@@ -58,6 +63,18 @@ export const runCommandRequestSchema = z.object({
 
 export const runCommandResponseSchema = z.object({
   executionId: z.string(),
+  mode: commandPresentationSchema,
+});
+
+export const terminalInputRequestSchema = z.object({
+  executionId: z.string(),
+  data: z.string().min(1),
+});
+
+export const terminalResizeRequestSchema = z.object({
+  executionId: z.string(),
+  cols: z.number().int().positive().max(500),
+  rows: z.number().int().positive().max(300),
 });
 
 export const writeClipboardRequestSchema = z.object({
@@ -83,6 +100,7 @@ export const historyRecallRequestSchema = z.object({
 
 export const commandExecutionSchema = z.object({
   id: z.string(),
+  presentation: commandPresentationSchema,
   commandText: z.string(),
   cwd: z.string(),
   shell: z.string(),
@@ -149,6 +167,7 @@ export const executionOutputEventSchema = z.object({
   type: z.literal("output"),
   executionId: z.string(),
   chunk: z.string(),
+  target: commandPresentationSchema,
 });
 
 export const executionCompletedEventSchema = z.object({
@@ -183,3 +202,5 @@ export type RunCommandRequest = z.infer<typeof runCommandRequestSchema>;
 export type RunCommandResponse = z.infer<typeof runCommandResponseSchema>;
 export type ShellContext = z.infer<typeof shellContextSchema>;
 export type ShellSurface = z.infer<typeof shellSurfaceSchema>;
+export type TerminalInputRequest = z.infer<typeof terminalInputRequestSchema>;
+export type TerminalResizeRequest = z.infer<typeof terminalResizeRequestSchema>;

@@ -49,6 +49,11 @@ import { Separator } from "@/components/ui/separator";
 import { getMishellApi } from "@/lib/mishell-api";
 import { cn } from "@/lib/utils";
 
+import {
+  TerminalModeSurface,
+  type TerminalModeSurfaceController,
+} from "./terminal-mode-surface";
+
 const exampleCommands = ["pwd", "git status --short", "pnpm check", "ls -la"];
 
 type RecallSession = {
@@ -66,10 +71,15 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const historySearchRequestRef = useRef(0);
   const historyRecallRequestRef = useRef(0);
   const recallSessionRef = useRef<RecallSession | null>(null);
+  const terminalControllerRef = useRef<TerminalModeSurfaceController | null>(null);
+  const terminalOutputBacklogRef = useRef(new Map<string, string[]>());
   const [historyOpen, setHistoryOpen] = useState(false);
   const [shellContext, setShellContext] = useState<ShellContext>(bootstrap.shell);
   const [draft, setDraft] = useState("pwd");
   const [executions, setExecutions] = useState<CommandExecution[]>([]);
+  const [activeTerminalExecutionId, setActiveTerminalExecutionId] = useState<
+    string | null
+  >(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [copyToast, setCopyToast] = useState<string | null>(null);
   const [autocompleteItems, setAutocompleteItems] = useState<
@@ -91,9 +101,17 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const hasRunningExecution = executions.some(
     (execution) => execution.status === "running",
   );
+  const activeSurfaceId = activeTerminalExecutionId
+    ? "terminal"
+    : historyOpen
+      ? "history"
+      : bootstrap.focusMode.defaultSurface;
   const latestExecution = executions[0] ?? null;
+  const activeTerminalExecution = activeTerminalExecutionId
+    ? executions.find((execution) => execution.id === activeTerminalExecutionId) ?? null
+    : null;
   const highlightedSurface = bootstrap.surfaces.find(
-    (surface) => surface.id === bootstrap.focusMode.defaultSurface,
+    (surface) => surface.id === activeSurfaceId,
   );
   const fullOutputExecution = fullOutputExecutionId
     ? executions.find((execution) => execution.id === fullOutputExecutionId) ?? null
@@ -145,6 +163,57 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     focusEditorAtEnd();
   });
 
+  const flushTerminalBacklog = useEffectEvent((executionId: string) => {
+    const controller = terminalControllerRef.current;
+    const backlog = terminalOutputBacklogRef.current.get(executionId);
+
+    if (!controller || !backlog || backlog.length === 0) {
+      return;
+    }
+
+    for (const chunk of backlog) {
+      controller.write(chunk);
+    }
+
+    terminalOutputBacklogRef.current.delete(executionId);
+    controller.focus();
+  });
+
+  const handleTerminalReady = useEffectEvent(
+    (controller: TerminalModeSurfaceController | null) => {
+      terminalControllerRef.current = controller;
+
+      if (controller && activeTerminalExecutionId) {
+        flushTerminalBacklog(activeTerminalExecutionId);
+      }
+    },
+  );
+
+  const handleTerminalInput = useEffectEvent((data: string) => {
+    if (!activeTerminalExecutionId) {
+      return;
+    }
+
+    void api.app.writeTerminalInput({
+      executionId: activeTerminalExecutionId,
+      data,
+    });
+  });
+
+  const handleTerminalResize = useEffectEvent(
+    ({ cols, rows }: { cols: number; rows: number }) => {
+      if (!activeTerminalExecutionId) {
+        return;
+      }
+
+      void api.app.resizeTerminal({
+        executionId: activeTerminalExecutionId,
+        cols,
+        rows,
+      });
+    },
+  );
+
   const handleExecutionEvent = useEffectEvent((event: ExecutionEvent) => {
     if (event.type === "started") {
       setExecutions((current) => [event.execution, ...current]);
@@ -152,6 +221,22 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     }
 
     if (event.type === "output") {
+      if (event.target === "terminal") {
+        if (
+          activeTerminalExecutionId === event.executionId &&
+          terminalControllerRef.current
+        ) {
+          terminalControllerRef.current.write(event.chunk);
+        } else {
+          const backlog =
+            terminalOutputBacklogRef.current.get(event.executionId) ?? [];
+          backlog.push(event.chunk);
+          terminalOutputBacklogRef.current.set(event.executionId, backlog);
+        }
+
+        return;
+      }
+
       setExecutions((current) =>
         current.map((execution) =>
           execution.id === event.executionId
@@ -166,6 +251,15 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         ),
       );
       return;
+    }
+
+    if (event.execution.presentation === "terminal") {
+      terminalOutputBacklogRef.current.delete(event.execution.id);
+
+      if (activeTerminalExecutionId === event.execution.id) {
+        setActiveTerminalExecutionId(null);
+        focusEditorAtEnd();
+      }
     }
 
     setShellContext(event.shellContext);
@@ -193,7 +287,19 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     return unsubscribe;
   }, [api, handleExecutionEvent]);
 
+  useEffect(() => {
+    if (!activeTerminalExecutionId) {
+      return;
+    }
+
+    flushTerminalBacklog(activeTerminalExecutionId);
+  }, [activeTerminalExecutionId, flushTerminalBacklog]);
+
   const handleHistoryShortcut = useEffectEvent((event: KeyboardEvent) => {
+    if (activeTerminalExecutionId) {
+      return;
+    }
+
     const isHistoryShortcut =
       (event.metaKey || event.ctrlKey) &&
       event.key.toLowerCase() === "r" &&
@@ -345,7 +451,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const submitCommand = useEffectEvent(async () => {
     const commandText = draft.trim();
 
-    if (!commandText || hasRunningExecution || isSubmitting) {
+    if (!commandText || hasRunningExecution || isSubmitting || activeTerminalExecutionId) {
       return;
     }
 
@@ -353,16 +459,24 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     recallSessionRef.current = null;
     setAutocompleteItems([]);
     setAutocompleteIndex(0);
+    setHistoryOpen(false);
     setDraft("");
+    let responseMode: "card" | "terminal" | null = null;
 
     try {
-      await api.app.runCommand({ commandText });
+      const response = await api.app.runCommand({ commandText });
+      responseMode = response.mode;
+
+      if (response.mode === "terminal") {
+        setActiveTerminalExecutionId(response.executionId);
+      }
     } catch (error) {
       const startedAt = new Date().toISOString();
 
       setExecutions((current) => [
         {
           id: `local-error-${startedAt}`,
+          presentation: "card",
           commandText,
           cwd: shellContext.cwd,
           shell: shellContext.executable,
@@ -382,7 +496,10 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
       setDraft(commandText);
     } finally {
       setIsSubmitting(false);
-      editorRef.current?.focus();
+
+      if (responseMode !== "terminal") {
+        editorRef.current?.focus();
+      }
     }
   });
 
@@ -569,7 +686,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
               <div className="flex flex-wrap items-center gap-3 text-[11px] uppercase tracking-[0.34em] text-[color:var(--text-muted)]">
                 <span className="inline-flex items-center gap-2">
                   <span className="h-2 w-2 bg-[color:var(--accent)]" />
-                  Phase 03 History Search
+                  Phase 04 Terminal Mode
                 </span>
                 <span>{bootstrap.platform}</span>
                 {isBrowserPreview ? (
@@ -583,14 +700,14 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                   {bootstrap.appName}
                 </h1>
                 <p className="max-w-3xl text-sm text-[color:var(--text-secondary)] sm:text-base">
-                  The default shell surface now reuses persisted command history
-                  for autocomplete, cwd-scoped arrow recall, and searchable
-                  command recovery without exposing raw terminal scrollback.
+                  The custom editor and command cards remain the default shell
+                  workflow, with terminal mode reserved for interactive programs
+                  that need a raw compatibility surface.
                 </p>
                 {isBrowserPreview ? (
                   <p className="max-w-2xl text-xs uppercase tracking-[0.22em] text-[color:var(--accent)]">
                     Preview fallback active. Launch the Electron window for the
-                    actual `node-pty` execution path.
+                    actual `node-pty` plus `ghostty-web` terminal path.
                   </p>
                 ) : null}
               </div>
@@ -625,7 +742,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                 <SurfaceRow
                   key={surface.id}
                   surface={surface}
-                  active={surface.id === bootstrap.focusMode.defaultSurface}
+                  active={surface.id === activeSurfaceId}
                 />
               ))}
             </nav>
@@ -653,95 +770,149 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
           </aside>
 
           <main className="grid gap-4">
-            <section className="grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,0.9fr)]">
-              <Panel
-                icon={Command}
-                title="Shell Editor"
-                kicker="Default surface"
-                action={
-                  <Button
-                    variant="accent"
-                    disabled={hasRunningExecution || isSubmitting || !draft.trim()}
-                    onClick={() => {
-                      void submitCommand();
-                    }}
-                  >
-                    {hasRunningExecution || isSubmitting ? "Running" : "Run Enter"}
-                  </Button>
-                }
-              >
-                <div className="space-y-4">
-                  <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.28em] text-[color:var(--text-muted)]">
-                    <span className="border border-[color:var(--border-strong)] px-2 py-1 text-[color:var(--accent)]">
-                      PTY-backed
-                    </span>
-                    <span>Free cursor placement</span>
-                    <span>Autocomplete from SQLite</span>
-                    <span>Up arrow = cwd recall</span>
-                    <span>Shift+Enter for newline</span>
-                  </div>
-                  <div className="border border-[color:var(--border-strong)] bg-[linear-gradient(180deg,rgba(18,18,25,0.82),rgba(10,10,16,0.96))]">
-                    <ShellHeader shellContext={shellContext} latestExecution={latestExecution} />
-                    <ShellEditor
-                      ref={editorRef}
-                      value={draft}
-                      disabled={hasRunningExecution || isSubmitting}
-                      onChange={(nextValue) => {
-                        setDraftValue(nextValue, "user");
-                      }}
-                      onKeyDown={handleEditorKeyDown}
-                      onSubmit={() => {
-                        void submitCommand();
-                      }}
+            {activeTerminalExecutionId ? (
+              <section className="grid gap-4">
+                <Panel
+                  icon={TerminalSquare}
+                  title="Terminal Mode"
+                  kicker="Compatibility active"
+                >
+                  <div className="space-y-4">
+                    <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_260px]">
+                      <div className="space-y-2 text-sm text-[color:var(--text-secondary)]">
+                        <p>
+                          Mishell detected an interactive command and moved the
+                          session into the raw `ghostty-web` surface. Input now
+                          goes directly to the PTY until the process exits.
+                        </p>
+                        <p>
+                          `Ctrl+C` is passed through to the active app. When the
+                          program returns, focus drops back to the custom editor.
+                        </p>
+                      </div>
+                      <div className="grid gap-2 text-xs uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
+                        <div className="flex items-center justify-between border border-[color:var(--border)] px-3 py-2">
+                          <span>Command</span>
+                          <span className="truncate text-right text-[color:var(--text-primary)]">
+                            {activeTerminalExecution?.commandText ?? "connecting"}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between border border-[color:var(--border)] px-3 py-2">
+                          <span>cwd</span>
+                          <span className="truncate text-right text-[color:var(--text-primary)]">
+                            {shellContext.displayCwd}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between border border-[color:var(--border)] px-3 py-2">
+                          <span>Shortcut</span>
+                          <span className="text-[color:var(--accent)]">Ctrl+C</span>
+                        </div>
+                      </div>
+                    </div>
+                    <TerminalModeSurface
+                      executionId={activeTerminalExecutionId}
+                      onInput={handleTerminalInput}
+                      onReady={handleTerminalReady}
+                      onResize={handleTerminalResize}
                     />
                   </div>
-                  <AutocompleteRail
-                    items={autocompleteItems}
-                    selectedIndex={autocompleteIndex}
-                    visible={autocompleteVisible}
-                    onSelect={applyAutocompleteSelection}
-                  />
-                  <div className="flex flex-wrap gap-2">
-                    {exampleCommands.map((commandText) => (
-                      <Button
-                        key={commandText}
-                        variant="ghost"
-                        size="sm"
+                </Panel>
+              </section>
+            ) : (
+              <section className="grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,0.9fr)]">
+                <Panel
+                  icon={Command}
+                  title="Shell Editor"
+                  kicker="Default surface"
+                  action={
+                    <Button
+                      variant="accent"
+                      disabled={hasRunningExecution || isSubmitting || !draft.trim()}
+                      onClick={() => {
+                        void submitCommand();
+                      }}
+                    >
+                      {hasRunningExecution || isSubmitting ? "Running" : "Run Enter"}
+                    </Button>
+                  }
+                >
+                  <div className="space-y-4">
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.28em] text-[color:var(--text-muted)]">
+                      <span className="border border-[color:var(--border-strong)] px-2 py-1 text-[color:var(--accent)]">
+                        PTY-backed
+                      </span>
+                      <span>Free cursor placement</span>
+                      <span>Autocomplete from SQLite</span>
+                      <span>Up arrow = cwd recall</span>
+                      <span>Shift+Enter for newline</span>
+                    </div>
+                    <div className="border border-[color:var(--border-strong)] bg-[linear-gradient(180deg,rgba(18,18,25,0.82),rgba(10,10,16,0.96))]">
+                      <ShellHeader
+                        shellContext={shellContext}
+                        latestExecution={latestExecution}
+                      />
+                      <ShellEditor
+                        ref={editorRef}
+                        value={draft}
                         disabled={hasRunningExecution || isSubmitting}
-                        onClick={() => {
-                          applyAutocompleteSelection(commandText);
+                        onChange={(nextValue) => {
+                          setDraftValue(nextValue, "user");
                         }}
-                      >
-                        {commandText}
-                      </Button>
-                    ))}
+                        onKeyDown={handleEditorKeyDown}
+                        onSubmit={() => {
+                          void submitCommand();
+                        }}
+                      />
+                    </div>
+                    <AutocompleteRail
+                      items={autocompleteItems}
+                      selectedIndex={autocompleteIndex}
+                      visible={autocompleteVisible}
+                      onSelect={applyAutocompleteSelection}
+                    />
+                    <div className="flex flex-wrap gap-2">
+                      {exampleCommands.map((commandText) => (
+                        <Button
+                          key={commandText}
+                          variant="ghost"
+                          size="sm"
+                          disabled={hasRunningExecution || isSubmitting}
+                          onClick={() => {
+                            applyAutocompleteSelection(commandText);
+                          }}
+                        >
+                          {commandText}
+                        </Button>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              </Panel>
+                </Panel>
 
-              <Panel
-                icon={TerminalSquare}
-                title="Terminal Compatibility"
-                kicker="Phase 4 fallback"
-              >
-                <div className="flex h-full flex-col justify-between gap-6">
-                  <div className="space-y-3 text-sm text-[color:var(--text-secondary)]">
-                    <p>
-                      Normal execution stays in cards. The raw terminal surface is
-                      still reserved for full-screen TUIs and other cases where the
-                      custom editor should yield to `ghostty-web`.
-                    </p>
-                    <p>
-                      Phase 4 must respect the current command-card pipeline and only
-                      switch modes for interactive sessions that genuinely need it.
-                    </p>
+                <Panel
+                  icon={TerminalSquare}
+                  title="Terminal Compatibility"
+                  kicker="Phase 4 fallback"
+                >
+                  <div className="flex h-full flex-col justify-between gap-6">
+                    <div className="space-y-3 text-sm text-[color:var(--text-secondary)]">
+                      <p>
+                        Normal execution stays in cards. The raw terminal surface
+                        only appears for commands that look like interactive TUIs
+                        such as `vim`, `lazygit`, `codex`, `ssh`, or a shell REPL.
+                      </p>
+                      <p>
+                        Detection is heuristic by command prefix in V1, which keeps
+                        mode switches intentional instead of letting normal commands
+                        drift into a raw terminal.
+                      </p>
+                    </div>
+                    <div className="border border-[color:var(--border)] bg-black/30 p-4 font-mono text-xs uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
+                      standby / compatibility layer / only for interactive flows
+                    </div>
                   </div>
-                  <div className="border border-[color:var(--border)] bg-black/30 p-4 font-mono text-xs uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
-                    standby / compatibility layer / not primary chrome
-                  </div>
-                </div>
-              </Panel>
-            </section>
+                </Panel>
+              </section>
+            )}
 
             <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
               <Panel
@@ -856,7 +1027,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                 />
                 <ArchitectureItem
                   label="Renderer"
-                  description="The UI stays card-based with a highlighted editor surface. No wrapped terminal scrollback is shown for normal commands."
+                  description="The UI stays card-first for normal commands, then mounts a dedicated `ghostty-web` surface only while interactive sessions are attached."
                 />
               </div>
             </Panel>
@@ -1084,9 +1255,13 @@ function CommandCard({
   onCopyBoth: () => void;
   onOpenFullOutput: () => void;
 }) {
+  const isTerminalPresentation = execution.presentation === "terminal";
   const displayOutput =
     execution.status === "running"
-      ? execution.output || "Waiting for output…"
+      ? execution.output ||
+        (isTerminalPresentation
+          ? "Terminal mode is active in the compatibility surface."
+          : "Waiting for output…")
       : execution.outputPreview || "No output captured.";
 
   return (
@@ -1101,6 +1276,7 @@ function CommandCard({
             <span>{new Date(execution.startedAt).toLocaleTimeString()}</span>
             <span>exit {execution.exitCode ?? "…"}</span>
             <span>{formatDuration(execution.durationMs)}</span>
+            <span>{isTerminalPresentation ? "terminal mode" : "card output"}</span>
           </div>
         </div>
         <StatusPill status={execution.status} />
@@ -1120,20 +1296,25 @@ function CommandCard({
         <Button
           variant="ghost"
           size="sm"
-          disabled={!execution.output}
+          disabled={!execution.output || isTerminalPresentation}
           onClick={onCopyOutput}
         >
           <Clipboard className="h-3.5 w-3.5" />
           Copy output
         </Button>
-        <Button variant="ghost" size="sm" disabled={!execution.output} onClick={onCopyBoth}>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={!execution.output || isTerminalPresentation}
+          onClick={onCopyBoth}
+        >
           <Clipboard className="h-3.5 w-3.5" />
           Copy both
         </Button>
         <Button
           variant="ghost"
           size="sm"
-          disabled={!execution.output}
+          disabled={!execution.output || isTerminalPresentation}
           onClick={onOpenFullOutput}
         >
           Full output

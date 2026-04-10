@@ -12,6 +12,8 @@ import {
   ipcChannels,
   runCommandRequestSchema,
   runCommandResponseSchema,
+  terminalInputRequestSchema,
+  terminalResizeRequestSchema,
   writeClipboardRequestSchema,
 } from "@shared/contracts";
 
@@ -33,6 +35,14 @@ export function registerAppIpc(runtime: AppRuntime) {
     });
 
     return runCommandResponseSchema.parse(response);
+  });
+
+  ipcMain.handle(ipcChannels.writeTerminalInput, (_event, input) => {
+    runtime.execution.writeTerminalInput(terminalInputRequestSchema.parse(input));
+  });
+
+  ipcMain.handle(ipcChannels.resizeTerminal, (_event, input) => {
+    runtime.execution.resizeTerminal(terminalResizeRequestSchema.parse(input));
   });
 
   ipcMain.handle(ipcChannels.writeClipboard, (_event, input) => {
