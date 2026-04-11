@@ -1752,7 +1752,7 @@ function HistorySearchDialog({
 
   return (
     <DialogContent
-      className="w-[min(94vw,1180px)]"
+      className="top-[6vh] max-h-[88vh] w-[min(94vw,1180px)] -translate-y-0 overflow-hidden"
       onOpenAutoFocus={(event) => {
         event.preventDefault();
       }}
@@ -1764,8 +1764,8 @@ function HistorySearchDialog({
           command back into the editor.
         </DialogDescription>
       </DialogHeader>
-      <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="space-y-3">
+      <div className="mt-5 grid min-h-0 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="min-h-0 space-y-3">
           <div className="flex items-center gap-3 border border-[color:var(--border)] bg-black/20 px-4 py-3">
             <Search className="h-4 w-4 text-[color:var(--accent)]" />
             <input
@@ -1862,13 +1862,13 @@ function HistorySearchDialog({
             </ScrollArea>
           )}
         </div>
-        <div className="space-y-3 border border-[color:var(--border)] bg-black/20 p-4 text-sm text-[color:var(--text-secondary)]">
+        <div className="flex min-h-0 flex-col gap-3 border border-[color:var(--border)] bg-black/20 p-4 text-sm text-[color:var(--text-secondary)] lg:h-[min(58vh,720px)]">
           <p className="font-display text-sm uppercase tracking-[0.24em] text-[color:var(--text-primary)]">
             Selected Row
           </p>
           {selectedResult ? (
             <>
-              <div className="border border-[color:var(--border)] bg-[color:var(--panel-muted)] px-4 py-3">
+              <div className="shrink-0 border border-[color:var(--border)] bg-[color:var(--panel-muted)] px-4 py-3">
                 <p className="font-mono text-sm text-[color:var(--text-primary)]">
                   {selectedResult.commandText}
                 </p>
@@ -1880,17 +1880,21 @@ function HistorySearchDialog({
                   <span>shell: {selectedResult.shell}</span>
                 </div>
               </div>
-              <div className="border border-[color:var(--border)] bg-[color:var(--panel-muted)] px-4 py-3">
-                <p className="text-[11px] uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
-                  Output Preview
-                </p>
-                <pre className="m-0 mt-3 whitespace-pre-wrap font-mono text-xs leading-6 text-[color:var(--text-secondary)]">
-                  {selectedResult.outputPreview || "No output preview stored."}
-                </pre>
+              <div className="flex min-h-0 flex-1 flex-col border border-[color:var(--border)] bg-[color:var(--panel-muted)]">
+                <div className="shrink-0 border-b border-[color:var(--border)] px-4 py-3">
+                  <p className="text-[11px] uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
+                    Output Preview
+                  </p>
+                </div>
+                <ScrollArea className="min-h-0 flex-1">
+                  <pre className="m-0 whitespace-pre-wrap px-4 py-3 font-mono text-xs leading-6 text-[color:var(--text-secondary)]">
+                    {selectedResult.outputPreview || "No output preview stored."}
+                  </pre>
+                </ScrollArea>
               </div>
               <Button
                 variant="accent"
-                className="w-full"
+                className="w-full shrink-0"
                 onClick={() => {
                   onSelectCommand(selectedResult.commandText);
                 }}
@@ -1899,9 +1903,11 @@ function HistorySearchDialog({
               </Button>
             </>
           ) : (
-            <p>No result selected yet.</p>
+            <div className="flex min-h-0 flex-1 items-center border border-[color:var(--border)] bg-[color:var(--panel-muted)] px-4 py-3">
+              <p>No result selected yet.</p>
+            </div>
           )}
-          <div className="border border-[color:var(--border)] bg-[color:var(--panel-muted)] px-4 py-3 text-xs uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
+          <div className="shrink-0 border border-[color:var(--border)] bg-[color:var(--panel-muted)] px-4 py-3 text-xs uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
             <div className="flex items-center justify-between gap-3">
               <span>Current cwd</span>
               <span className="truncate text-right">{currentCwd}</span>
