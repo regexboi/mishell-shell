@@ -175,11 +175,13 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const api = getMishellApi();
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const historySearchInputRef = useRef<HTMLInputElement | null>(null);
+  const feedScrollRef = useRef<HTMLDivElement | null>(null);
   const autocompleteRequestRef = useRef(0);
   const historySearchRequestRef = useRef(0);
   const historyRecallRequestRef = useRef(0);
   const terminalControllerRef = useRef<TerminalModeSurfaceController | null>(null);
   const terminalOutputBacklogRef = useRef(new Map<string, string[]>());
+  const shouldStickFeedToBottomRef = useRef(true);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [shellContext, setShellContext] = useState<ShellContext>(bootstrap.shell);
   const [draft, setDraft] = useState("pwd");
@@ -229,6 +231,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     (execution) => execution.status === "running",
   );
   const latestExecution = executions[0] ?? null;
+  const feedExecutions = [...executions].reverse();
   const fullOutputExecution = fullOutputExecutionId
     ? executions.find((execution) => execution.id === fullOutputExecutionId) ?? null
     : null;
@@ -639,6 +642,16 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
       input.setSelectionRange(cursor, cursor);
     }
   }, [historyOpen, historyQuery]);
+
+  useLayoutEffect(() => {
+    const feed = feedScrollRef.current;
+
+    if (!feed || !shouldStickFeedToBottomRef.current) {
+      return;
+    }
+
+    feed.scrollTop = feed.scrollHeight;
+  }, [executions]);
 
   const submitCommand = useEffectEvent(async () => {
     const commandText = draft.trim();
@@ -1199,7 +1212,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
             "flex min-h-0 w-full flex-1 flex-col overflow-hidden",
             activeTerminalExecutionId
               ? "gap-0 px-0 py-0"
-              : "mx-auto max-w-[1920px] gap-4 px-4 py-3 sm:px-6 lg:px-8",
+              : "mx-auto max-w-[1920px] gap-4 px-3 py-3 sm:px-4 lg:px-5",
           )}
         >
           <main
@@ -1222,7 +1235,16 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
             ) : (
               <>
                 <section className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                  <div className="mishell-overlay-scroll min-h-0 flex-1 overflow-y-auto">
+                  <div
+                    ref={feedScrollRef}
+                    className="mishell-overlay-scroll min-h-0 flex-1 overflow-y-auto"
+                    onScroll={(event) => {
+                      const node = event.currentTarget;
+                      const distanceFromBottom =
+                        node.scrollHeight - node.clientHeight - node.scrollTop;
+                      shouldStickFeedToBottomRef.current = distanceFromBottom <= 48;
+                    }}
+                  >
                     {executions.length === 0 ? (
                       <div className="border border-dashed border-[color:var(--border)] bg-[color:var(--panel-muted)] px-5 py-6 text-sm text-[color:var(--text-secondary)]">
                         Run a command to create the first card. Good smoke checks
@@ -1231,28 +1253,30 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                         fallback.
                       </div>
                     ) : (
-                      <div className="flex min-w-0 flex-col divide-y divide-[color:var(--border)]">
-                        {executions.map((execution) => (
-                          <CommandCard
-                            key={execution.id}
-                            execution={execution}
-                            onCopyCommand={() => {
-                              void copyText(execution.commandText, "Command");
-                            }}
-                            onCopyOutput={() => {
-                              void copyText(execution.output, "Output");
-                            }}
-                            onCopyBoth={() => {
-                              void copyText(
-                                `cmd: ${execution.commandText}\nout: ${execution.output}`,
-                                "Command + output",
-                              );
-                            }}
-                            onOpenFullOutput={() => {
-                              setFullOutputExecutionId(execution.id);
-                            }}
-                          />
-                        ))}
+                      <div className="flex min-h-full min-w-0 flex-col justify-end">
+                        <div className="flex min-w-0 flex-col divide-y divide-[color:var(--border)]">
+                          {feedExecutions.map((execution) => (
+                            <CommandCard
+                              key={execution.id}
+                              execution={execution}
+                              onCopyCommand={() => {
+                                void copyText(execution.commandText, "Command");
+                              }}
+                              onCopyOutput={() => {
+                                void copyText(execution.output, "Output");
+                              }}
+                              onCopyBoth={() => {
+                                void copyText(
+                                  `cmd: ${execution.commandText}\nout: ${execution.output}`,
+                                  "Command + output",
+                                );
+                              }}
+                              onOpenFullOutput={() => {
+                                setFullOutputExecutionId(execution.id);
+                              }}
+                            />
+                          ))}
+                        </div>
                       </div>
                     )}
                   </div>
