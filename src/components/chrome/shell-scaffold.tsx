@@ -179,7 +179,6 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const autocompleteRequestRef = useRef(0);
   const historySearchRequestRef = useRef(0);
   const historyRecallRequestRef = useRef(0);
-  const recallSessionRef = useRef<RecallSession | null>(null);
   const terminalControllerRef = useRef<TerminalModeSurfaceController | null>(null);
   const terminalOutputBacklogRef = useRef(new Map<string, string[]>());
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -198,6 +197,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     [],
   );
   const [autocompleteIndex, setAutocompleteIndex] = useState<number | null>(null);
+  const [recallSession, setRecallSession] = useState<RecallSession | null>(null);
   const [historyQuery, setHistoryQuery] = useState("");
   const [historyResults, setHistoryResults] = useState<HistoryEntry[]>([]);
   const [historySelectedIndex, setHistorySelectedIndex] = useState(0);
@@ -236,14 +236,17 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const fullOutputExecution = fullOutputExecutionId
     ? executions.find((execution) => execution.id === fullOutputExecutionId) ?? null
     : null;
+  const recallVisible = recallSession !== null && recallSession.items.length > 0;
   const historyAutocompleteVisible =
-    autocompleteItems.length > 0 && recallSessionRef.current === null;
+    autocompleteItems.length > 0 && recallSession === null;
   const pathCompletionVisible =
-    pathCompletionItems.length > 0 && recallSessionRef.current === null;
+    pathCompletionItems.length > 0 && recallSession === null;
   const selectedAutocomplete =
     autocompleteIndex === null ? null : autocompleteItems[autocompleteIndex] ?? null;
   const selectedPathCompletion =
     autocompleteIndex === null ? null : pathCompletionItems[autocompleteIndex] ?? null;
+  const selectedRecallItem =
+    recallSession === null ? null : recallSession.items[recallSession.index] ?? null;
   const activeTheme =
     themeOptions.find((theme) => theme.id === themeId) ?? defaultTheme;
 
@@ -272,7 +275,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const setDraftValue = useEffectEvent(
     (nextValue: string, source: "history" | "system" | "user" = "user") => {
       if (source === "user") {
-        recallSessionRef.current = null;
+        setRecallSession(null);
         setPathCompletionItems([]);
         setAutocompleteIndex(null);
       }
@@ -295,7 +298,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
       );
     });
 
-    recallSessionRef.current = null;
+    setRecallSession(null);
     setDraftValue(commandText, "system");
     setAutocompleteItems(continuationItems);
     setPathCompletionItems([]);
@@ -304,7 +307,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   });
 
   const applyPathCompletionSelection = useEffectEvent((item: PathCompletionItem) => {
-    recallSessionRef.current = null;
+    setRecallSession(null);
     setPathCompletionItems([]);
     setAutocompleteItems([]);
     setAutocompleteIndex(null);
@@ -313,7 +316,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   });
 
   const applyHistoryResult = useEffectEvent((commandText: string) => {
-    recallSessionRef.current = null;
+    setRecallSession(null);
     setDraftValue(commandText, "history");
     setHistoryOpen(false);
     setAutocompleteItems([]);
@@ -640,7 +643,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     }
 
     setIsSubmitting(true);
-    recallSessionRef.current = null;
+    setRecallSession(null);
     setAutocompleteItems([]);
     setPathCompletionItems([]);
     setAutocompleteIndex(null);
@@ -797,7 +800,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   });
 
   const clearEditorDraft = useEffectEvent(() => {
-    recallSessionRef.current = null;
+    setRecallSession(null);
     setAutocompleteItems([]);
     setPathCompletionItems([]);
     setAutocompleteIndex(null);
@@ -823,28 +826,26 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     return true;
   });
 
+  const acceptRecallSelection = useEffectEvent(() => {
+    if (!selectedRecallItem) {
+      return false;
+    }
+
+    setRecallSession(null);
+    setDraftValue(selectedRecallItem.commandText, "system");
+    focusEditorAtEnd();
+    return true;
+  });
+
+  const applyRecallResult = useEffectEvent((commandText: string) => {
+    setRecallSession(null);
+    setDraftValue(commandText, "system");
+    focusEditorAtEnd();
+  });
+
   const navigateRecallHistory = useEffectEvent(
     async (direction: "back" | "forward") => {
-      const applyRecallSelection = (session: RecallSession, index: number) => {
-        if (index < 0) {
-          recallSessionRef.current = null;
-          setDraftValue(session.originalDraft, "system");
-          focusEditorAtEnd();
-          return;
-        }
-
-        const nextIndex = Math.min(index, session.items.length - 1);
-        const nextSession = {
-          ...session,
-          index: nextIndex,
-        };
-
-        recallSessionRef.current = nextSession;
-        setDraftValue(nextSession.items[nextIndex]!.commandText, "system");
-        focusEditorAtEnd();
-      };
-
-      const activeSession = recallSessionRef.current;
+      const activeSession = recallSession;
 
       if (!activeSession || activeSession.cwd !== shellContext.cwd) {
         if (direction === "forward") {
@@ -871,26 +872,47 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
           return;
         }
 
-        applyRecallSelection(
-          {
-            cwd: shellContext.cwd,
-            originalDraft: draft,
-            items,
-            index: 0,
-          },
-          0,
-        );
+        setRecallSession({
+          cwd: shellContext.cwd,
+          originalDraft: draft,
+          items,
+          index: 0,
+        });
         return;
       }
 
       if (direction === "back") {
-        applyRecallSelection(activeSession, activeSession.index + 1);
+        setRecallSession({
+          ...activeSession,
+          index: Math.min(activeSession.index + 1, activeSession.items.length - 1),
+        });
         return;
       }
 
-      applyRecallSelection(activeSession, activeSession.index - 1);
+      if (activeSession.index <= 0) {
+        setRecallSession(null);
+        setDraftValue(activeSession.originalDraft, "system");
+        focusEditorAtEnd();
+        return;
+      }
+
+      setRecallSession({
+        ...activeSession,
+        index: activeSession.index - 1,
+      });
     },
   );
+
+  const hoverRecallHistory = useEffectEvent((index: number) => {
+    if (!recallSession) {
+      return;
+    }
+
+    setRecallSession({
+      ...recallSession,
+      index,
+    });
+  });
 
   const handleEditorKeyDown = useEffectEvent(
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -903,6 +925,20 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
       ) {
         event.preventDefault();
         clearEditorDraft();
+        return true;
+      }
+
+      if (
+        event.key === "Enter" &&
+        !event.shiftKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        recallVisible &&
+        selectedRecallItem !== null
+      ) {
+        event.preventDefault();
+        acceptRecallSelection();
         return true;
       }
 
@@ -931,6 +967,19 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
       ) {
         event.preventDefault();
         acceptAutocomplete();
+        return true;
+      }
+
+      if (
+        event.key === "ArrowDown" &&
+        !event.shiftKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        recallVisible
+      ) {
+        event.preventDefault();
+        void navigateRecallHistory("forward");
         return true;
       }
 
@@ -1052,19 +1101,6 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
       ) {
         event.preventDefault();
         void navigateRecallHistory("back");
-        return true;
-      }
-
-      if (
-        event.key === "ArrowDown" &&
-        !event.shiftKey &&
-        !event.metaKey &&
-        !event.ctrlKey &&
-        !event.altKey &&
-        recallSessionRef.current !== null
-      ) {
-        event.preventDefault();
-        void navigateRecallHistory("forward");
         return true;
       }
 
@@ -1251,6 +1287,19 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                       latestExecution={latestExecution}
                     />
                     <ShellEditor
+                      autocompleteItems={autocompleteItems}
+                      historyVisible={historyAutocompleteVisible}
+                      onHighlightIndex={setAutocompleteIndex}
+                      onHighlightRecallIndex={hoverRecallHistory}
+                      onSelectRecallCommand={applyRecallResult}
+                      recallItems={recallSession?.items ?? []}
+                      recallVisible={recallVisible}
+                      selectedRecallItem={selectedRecallItem}
+                      onSelectAutocomplete={applyAutocompleteSelection}
+                      onSelectPathCompletion={applyPathCompletionSelection}
+                      pathCompletionItems={pathCompletionItems}
+                      pathVisible={pathCompletionVisible}
+                      selectedIndex={autocompleteIndex}
                       ref={editorRef}
                       value={draft}
                       disabled={hasRunningExecution || isSubmitting}
@@ -1353,11 +1402,30 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
 }
 
 type ShellEditorProps = {
+  autocompleteItems: HistoryAutocompleteItem[];
+  historyVisible: boolean;
+  onHighlightIndex: (index: number | null) => void;
+  onHighlightRecallIndex: (index: number) => void;
+  recallItems: HistoryRecallItem[];
+  recallVisible: boolean;
+  onSelectRecallCommand: (commandText: string) => void;
+  selectedRecallItem: HistoryRecallItem | null;
   value: string;
+  onSelectAutocomplete: (commandText: string) => void;
+  onSelectPathCompletion: (item: PathCompletionItem) => void;
   disabled: boolean;
   onChange: (value: string) => void;
   onKeyDown?: (event: React.KeyboardEvent<HTMLTextAreaElement>) => boolean | void;
+  pathCompletionItems: PathCompletionItem[];
+  pathVisible: boolean;
+  selectedIndex: number | null;
   onSubmit: () => void;
+};
+
+type FloatingSuggestionAnchor = {
+  bottom: number;
+  left: number;
+  width: number;
 };
 
 /** `text-sm` + `leading-7` → 1.25rem × 1.75 line-height = 28px per line; `py-5` → 20px × 2 vertical padding */
@@ -1371,15 +1439,31 @@ const EDITOR_MAX_HEIGHT =
   EDITOR_MAX_LINES * EDITOR_LINE_HEIGHT_PX + EDITOR_VERTICAL_PAD_PX;
 
 const ShellEditor = ({
+  autocompleteItems,
+  historyVisible,
+  onHighlightIndex,
+  onHighlightRecallIndex,
+  onSelectRecallCommand,
+  recallItems,
+  recallVisible,
+  selectedRecallItem,
   value,
+  onSelectAutocomplete,
+  onSelectPathCompletion,
   disabled,
   onChange,
   onKeyDown,
+  pathCompletionItems,
+  pathVisible,
+  selectedIndex,
   onSubmit,
   ref,
 }: ShellEditorProps & { ref: React.RefObject<HTMLTextAreaElement | null> }) => {
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const highlightRef = useRef<HTMLPreElement | null>(null);
   const [editorHeight, setEditorHeight] = useState(EDITOR_MIN_HEIGHT);
+  const [floatingAnchor, setFloatingAnchor] =
+    useState<FloatingSuggestionAnchor | null>(null);
 
   useLayoutEffect(() => {
     const ta = ref.current;
@@ -1398,9 +1482,33 @@ const ShellEditor = ({
   }, [value, disabled, ref]);
 
   const scrollEditor = editorHeight >= EDITOR_MAX_HEIGHT;
+  const suggestionVisible = pathVisible || historyVisible || recallVisible;
+
+  useLayoutEffect(() => {
+    const textarea = ref.current;
+    const container = containerRef.current;
+
+    if (!suggestionVisible || !textarea || !container) {
+      setFloatingAnchor(null);
+      return;
+    }
+
+    setFloatingAnchor(getFloatingSuggestionAnchor(textarea, container));
+  }, [
+    editorHeight,
+    historyVisible,
+    pathVisible,
+    recallVisible,
+    ref,
+    selectedIndex,
+    selectedRecallItem,
+    suggestionVisible,
+    value,
+  ]);
 
   return (
     <div
+      ref={containerRef}
       className="relative w-full"
       style={{ height: editorHeight, minHeight: EDITOR_MIN_HEIGHT }}
     >
@@ -1409,15 +1517,7 @@ const ShellEditor = ({
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 box-border overflow-hidden whitespace-pre-wrap break-words px-4 py-5 font-mono text-sm leading-7"
       >
-        {value ? (
-          renderHighlightedCommand(value)
-        ) : (
-          <span className="text-[color:var(--text-muted)]">
-            Type a shell command. `Enter` runs it. `Tab` opens history or path
-            completions. `Ctrl+C` clears the draft. `Shift+Enter` inserts a new
-            line.
-          </span>
-        )}
+        {value ? renderHighlightedCommand(value) : "\u00A0"}
       </pre>
       <textarea
         ref={ref}
@@ -1431,6 +1531,19 @@ const ShellEditor = ({
           if (highlightRef.current) {
             highlightRef.current.scrollTop = event.currentTarget.scrollTop;
             highlightRef.current.scrollLeft = event.currentTarget.scrollLeft;
+          }
+
+          if (containerRef.current) {
+            setFloatingAnchor(
+              getFloatingSuggestionAnchor(event.currentTarget, containerRef.current),
+            );
+          }
+        }}
+        onSelect={(event) => {
+          if (containerRef.current) {
+            setFloatingAnchor(
+              getFloatingSuggestionAnchor(event.currentTarget, containerRef.current),
+            );
           }
         }}
         onKeyDown={(event) => {
@@ -1474,6 +1587,24 @@ const ShellEditor = ({
           disabled && "cursor-not-allowed opacity-70",
         )}
       />
+      {suggestionVisible && floatingAnchor ? (
+        <FloatingSuggestionDropdown
+          anchor={floatingAnchor}
+          autocompleteItems={autocompleteItems}
+          historyVisible={historyVisible}
+          onHighlightIndex={onHighlightIndex}
+          onHighlightRecallIndex={onHighlightRecallIndex}
+          onSelectRecallCommand={onSelectRecallCommand}
+          onSelectAutocomplete={onSelectAutocomplete}
+          onSelectPathCompletion={onSelectPathCompletion}
+          pathCompletionItems={pathCompletionItems}
+          pathVisible={pathVisible}
+          recallItems={recallItems}
+          recallVisible={recallVisible}
+          selectedIndex={selectedIndex}
+          selectedRecallItem={selectedRecallItem}
+        />
+      ) : null}
     </div>
   );
 };
@@ -1588,6 +1719,170 @@ function CommandCard({
         </Button>
       </div>
     </article>
+  );
+}
+
+function FloatingSuggestionDropdown({
+  anchor,
+  autocompleteItems,
+  historyVisible,
+  onHighlightIndex,
+  onHighlightRecallIndex,
+  onSelectRecallCommand,
+  onSelectAutocomplete,
+  onSelectPathCompletion,
+  pathCompletionItems,
+  pathVisible,
+  recallItems,
+  recallVisible,
+  selectedIndex,
+  selectedRecallItem,
+}: {
+  anchor: FloatingSuggestionAnchor;
+  autocompleteItems: HistoryAutocompleteItem[];
+  historyVisible: boolean;
+  onHighlightIndex: (index: number | null) => void;
+  onHighlightRecallIndex: (index: number) => void;
+  onSelectRecallCommand: (commandText: string) => void;
+  onSelectAutocomplete: (commandText: string) => void;
+  onSelectPathCompletion: (item: PathCompletionItem) => void;
+  pathCompletionItems: PathCompletionItem[];
+  pathVisible: boolean;
+  recallItems: HistoryRecallItem[];
+  recallVisible: boolean;
+  selectedIndex: number | null;
+  selectedRecallItem: HistoryRecallItem | null;
+}) {
+  const items = pathVisible
+    ? pathCompletionItems
+    : recallVisible
+      ? recallItems
+      : autocompleteItems;
+
+  if (items.length === 0) {
+    return null;
+  }
+
+  return (
+    <div
+      className="absolute z-20 overflow-hidden border border-[color:var(--border-strong)] bg-[color:color-mix(in_srgb,var(--panel-strong)_92%,black)] shadow-[0_0_0_1px_rgba(195,115,255,0.12),0_18px_50px_rgba(0,0,0,0.5)] backdrop-blur-md"
+      style={{
+        bottom: anchor.bottom,
+        left: anchor.left,
+        width: anchor.width,
+      }}
+    >
+      <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2 text-[10px] uppercase tracking-[0.22em] text-[color:var(--text-muted)]">
+        <span>{pathVisible ? "Path" : recallVisible ? "Recall" : "History"}</span>
+        <span>{items.length}</span>
+      </div>
+      <div className="mishell-overlay-scroll max-h-56 overflow-y-auto">
+        {pathVisible
+          ? pathCompletionItems.map((item, index) => (
+              <button
+                key={`${item.path}-${item.label}`}
+                type="button"
+                className={cn(
+                  "flex w-full items-start justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2.5 text-left transition last:border-b-0",
+                  selectedIndex === index
+                    ? "bg-[color:color-mix(in_srgb,var(--accent)_14%,transparent)]"
+                    : "hover:bg-white/4",
+                )}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  onSelectPathCompletion(item);
+                }}
+                onMouseEnter={() => {
+                  onHighlightIndex(index);
+                }}
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-mono text-sm text-[color:var(--text-primary)]">
+                    {item.label}
+                  </div>
+                  <div className="mt-1 truncate text-[11px] text-[color:var(--text-secondary)]">
+                    {item.path}
+                  </div>
+                </div>
+                <span className="shrink-0 pt-0.5 text-[10px] uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                  {item.isDirectory ? "dir" : "file"}
+                </span>
+              </button>
+            ))
+          : recallVisible
+            ? recallItems.map((item, index) => (
+                <button
+                  key={`${item.id}-${item.startedAt}`}
+                  type="button"
+                  className={cn(
+                    "flex w-full items-start justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2.5 text-left transition last:border-b-0",
+                    selectedRecallItem?.id === item.id
+                      ? "bg-[color:color-mix(in_srgb,var(--accent)_14%,transparent)]"
+                      : "hover:bg-white/4",
+                  )}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    onHighlightRecallIndex(index);
+                  }}
+                  onClick={() => {
+                    onSelectRecallCommand(item.commandText);
+                  }}
+                  onMouseEnter={() => {
+                    onHighlightRecallIndex(index);
+                  }}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-mono text-sm text-[color:var(--text-primary)]">
+                      {item.commandText}
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[color:var(--text-secondary)]">
+                      <span>last used {formatRelativeTime(item.startedAt)}</span>
+                      <span>{formatAbsoluteTimestamp(item.startedAt)}</span>
+                    </div>
+                  </div>
+                  <span className="shrink-0 pt-0.5 text-[10px] uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                    exit {item.exitCode ?? "?"}
+                  </span>
+                </button>
+              ))
+          : historyVisible
+            ? autocompleteItems.map((item, index) => (
+                <button
+                  key={`${item.commandText}-${item.lastStartedAt}`}
+                  type="button"
+                  className={cn(
+                    "flex w-full items-start justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2.5 text-left transition last:border-b-0",
+                    selectedIndex === index
+                      ? "bg-[color:color-mix(in_srgb,var(--accent)_14%,transparent)]"
+                      : "hover:bg-white/4",
+                  )}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    onSelectAutocomplete(item.commandText);
+                  }}
+                  onMouseEnter={() => {
+                    onHighlightIndex(index);
+                  }}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-mono text-sm text-[color:var(--text-primary)]">
+                      {item.commandText}
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[color:var(--text-secondary)]">
+                      <span className="truncate">{item.cwd}</span>
+                      <span>{item.usageCount}x</span>
+                      <span>last used {formatRelativeTime(item.lastStartedAt)}</span>
+                    </div>
+                  </div>
+                  <div className="shrink-0 pt-0.5 text-right text-[10px] uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                    <div>{item.cwdMatch ? "cwd match" : "history"}</div>
+                    <div className="mt-1">{formatAbsoluteTimestamp(item.lastStartedAt)}</div>
+                  </div>
+                </button>
+              ))
+            : null}
+      </div>
+    </div>
   );
 }
 
@@ -1926,6 +2221,83 @@ function clampIndex(index: number, length: number) {
   return index;
 }
 
+function getFloatingSuggestionAnchor(
+  textarea: HTMLTextAreaElement,
+  container: HTMLDivElement,
+): FloatingSuggestionAnchor | null {
+  const caret = measureTextareaCaret(textarea);
+
+  if (!caret) {
+    return null;
+  }
+
+  const gutter = 12;
+  const width = Math.min(380, Math.max(220, container.clientWidth - gutter * 2));
+  const left = clampNumber(
+    caret.left + 10,
+    gutter,
+    Math.max(gutter, container.clientWidth - width - gutter),
+  );
+
+  return {
+    bottom: Math.max(18, container.clientHeight - caret.top + 10),
+    left,
+    width,
+  };
+}
+
+function measureTextareaCaret(textarea: HTMLTextAreaElement) {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const style = window.getComputedStyle(textarea);
+  const mirror = document.createElement("div");
+  const marker = document.createElement("span");
+  const before = textarea.value.slice(0, textarea.selectionStart);
+
+  mirror.style.position = "absolute";
+  mirror.style.top = "0";
+  mirror.style.left = "-9999px";
+  mirror.style.visibility = "hidden";
+  mirror.style.pointerEvents = "none";
+  mirror.style.whiteSpace = "pre-wrap";
+  mirror.style.overflowWrap = "break-word";
+  mirror.style.wordBreak = "break-word";
+  mirror.style.boxSizing = style.boxSizing;
+  mirror.style.width = `${textarea.clientWidth}px`;
+  mirror.style.padding = style.padding;
+  mirror.style.border = style.border;
+  mirror.style.font = style.font;
+  mirror.style.fontKerning = style.fontKerning;
+  mirror.style.letterSpacing = style.letterSpacing;
+  mirror.style.lineHeight = style.lineHeight;
+  mirror.style.tabSize = style.tabSize;
+  mirror.style.textTransform = style.textTransform;
+  mirror.style.textIndent = style.textIndent;
+
+  mirror.textContent = before.endsWith("\n") ? `${before}\u200b` : before;
+  marker.textContent =
+    textarea.value.slice(textarea.selectionStart, textarea.selectionStart + 1) ||
+    "\u200b";
+  mirror.appendChild(marker);
+  document.body.appendChild(mirror);
+
+  const mirrorRect = mirror.getBoundingClientRect();
+  const markerRect = marker.getBoundingClientRect();
+
+  mirror.remove();
+
+  return {
+    left: markerRect.left - mirrorRect.left - textarea.scrollLeft,
+    top: markerRect.top - mirrorRect.top - textarea.scrollTop,
+  };
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
 function formatDuration(durationMs: number | null) {
   if (durationMs === null) {
     return "running";
@@ -1945,6 +2317,24 @@ function formatAbsoluteTimestamp(value: string) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function formatRelativeTime(value: string) {
+  const elapsed = Date.now() - Date.parse(value);
+
+  if (elapsed < 60_000) {
+    return "just now";
+  }
+
+  if (elapsed < 3_600_000) {
+    return `${Math.round(elapsed / 60_000)}m ago`;
+  }
+
+  if (elapsed < 86_400_000) {
+    return `${Math.round(elapsed / 3_600_000)}h ago`;
+  }
+
+  return formatAbsoluteTimestamp(value);
 }
 
 function isCursorOnFirstLine(textarea: HTMLTextAreaElement) {
