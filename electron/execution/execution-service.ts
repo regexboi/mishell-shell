@@ -15,6 +15,8 @@ import type {
   HistoryRecallResponse,
   HistorySearchRequest,
   HistorySearchResponse,
+  PathCompletionRequest,
+  PathCompletionResponse,
   RunCommandRequest,
   RunCommandResponse,
   ShellContext,
@@ -52,11 +54,22 @@ type ActiveTerminalExecution = {
   transcriptStream: fs.WriteStream;
 };
 
+type CompletionPathApi = Pick<
+  typeof path.posix,
+  "isAbsolute" | "join" | "parse" | "resolve" | "sep"
+>;
+
+type CompletionContextOptions = {
+  isDirectory?: (candidate: string) => boolean;
+  pathApi?: CompletionPathApi;
+};
+
 export type ExecutionService = {
   getShellContext: () => ShellContext;
   getHistoryAutocomplete: (
     input: HistoryAutocompleteRequest,
   ) => HistoryAutocompleteResponse;
+  getPathCompletions: (input: PathCompletionRequest) => PathCompletionResponse;
   searchHistory: (input: HistorySearchRequest) => HistorySearchResponse;
   getHistoryRecall: (input: HistoryRecallRequest) => HistoryRecallResponse;
   runCommand: (
@@ -393,6 +406,9 @@ export function createExecutionService(
     },
     getHistoryAutocomplete(input) {
       return queryHistoryAutocomplete(options.database.db, input);
+    },
+    getPathCompletions(input) {
+      return resolvePathCompletions(input);
     },
     searchHistory(input) {
       return queryHistorySearch(options.database.db, input);
@@ -801,6 +817,48 @@ function createTerminalSummary(exitCode: number) {
     : `Interactive session exited with code ${exitCode}.`;
 }
 
+export function resolvePathCompletions(
+  input: PathCompletionRequest,
+): PathCompletionResponse {
+  const context = getCompletionContext(input.draft, input.cwd);
+
+  if (!context) {
+    return { items: [] };
+  }
+
+  let entries: fs.Dirent[];
+
+  try {
+    entries = fs.readdirSync(context.searchDirectory, { withFileTypes: true });
+  } catch {
+    return { items: [] };
+  }
+
+  const items = entries
+    .filter((entry) => entry.name.startsWith(context.prefix))
+    .sort((left, right) => {
+      if (left.isDirectory() !== right.isDirectory()) {
+        return Number(right.isDirectory()) - Number(left.isDirectory());
+      }
+
+      return left.name.localeCompare(right.name);
+    })
+    .slice(0, input.limit)
+    .map((entry) => {
+      const suffix = entry.isDirectory() ? context.separator : "";
+      const replacement = `${context.relativeBase}${entry.name}${suffix}`;
+
+      return {
+        nextValue: `${input.draft.slice(0, context.tokenStart)}${replacement}`,
+        label: `${entry.name}${suffix}`,
+        path: context.pathApi.join(context.searchDirectory, entry.name),
+        isDirectory: entry.isDirectory(),
+      };
+    });
+
+  return { items };
+}
+
 function readRecordedCwd(cwdCapturePath: string) {
   if (!fs.existsSync(cwdCapturePath)) {
     return null;
@@ -871,6 +929,146 @@ function tokenizeCommand(commandText: string) {
   }
 
   return tokens;
+}
+
+export function getCompletionContext(
+  draft: string,
+  cwd: string,
+  options: CompletionContextOptions = {},
+) {
+  if (!draft.trim()) {
+    return null;
+  }
+
+  const trailingWhitespace = /\s$/.test(draft);
+  const pathApi = options.pathApi ?? selectCompletionPathApi("", cwd);
+
+  if (trailingWhitespace) {
+    return {
+      tokenStart: draft.length,
+      prefix: "",
+      relativeBase: "",
+      searchDirectory: cwd,
+      separator: pathApi.sep,
+      pathApi,
+    };
+  }
+
+  const tokenMatch = draft.match(/(?:^|\s)([^\s]+)$/);
+  const token = tokenMatch?.[1];
+
+  if (!token || token.startsWith("-")) {
+    return null;
+  }
+
+  const tokenStart = draft.length - token.length;
+  const completionPathApi = options.pathApi ?? selectCompletionPathApi(token, cwd);
+  const separatorIndex = Math.max(token.lastIndexOf("/"), token.lastIndexOf("\\"));
+  const relativeBase =
+    separatorIndex >= 0 ? token.slice(0, separatorIndex + 1) : "";
+  const prefix = separatorIndex >= 0 ? token.slice(separatorIndex + 1) : token;
+  const baseDirectory =
+    relativeBase.length > 0
+      ? resolveCompletionBase(cwd, relativeBase, {
+          isDirectory: options.isDirectory,
+          pathApi: completionPathApi,
+        })
+      : cwd;
+
+  if (!baseDirectory) {
+    return null;
+  }
+
+  return {
+    tokenStart,
+    prefix,
+    relativeBase,
+    searchDirectory: baseDirectory,
+    separator: selectCompletionSeparator(token, completionPathApi),
+    pathApi: completionPathApi,
+  };
+}
+
+function resolveCompletionBase(
+  cwd: string,
+  relativeBase: string,
+  options: CompletionContextOptions = {},
+) {
+  const pathApi = options.pathApi ?? selectCompletionPathApi(relativeBase, cwd);
+  const normalizedBase = trimTrailingCompletionSeparator(relativeBase, pathApi);
+
+  const resolved = pathApi.isAbsolute(normalizedBase)
+    ? normalizedBase
+    : pathApi.resolve(cwd, normalizedBase);
+
+  const isDirectory = options.isDirectory ?? isExistingDirectory;
+
+  try {
+    if (!isDirectory(resolved)) {
+      return null;
+    }
+
+    return resolved;
+  } catch {
+    return null;
+  }
+}
+
+function selectCompletionPathApi(
+  token: string,
+  cwd: string,
+): CompletionPathApi {
+  if (
+    token.includes("\\") ||
+    looksLikeWindowsPath(token) ||
+    looksLikeWindowsPath(cwd)
+  ) {
+    return path.win32;
+  }
+
+  return path.posix;
+}
+
+function selectCompletionSeparator(
+  token: string,
+  pathApi: CompletionPathApi,
+) {
+  if (token.includes("\\")) {
+    return "\\";
+  }
+
+  if (token.includes("/")) {
+    return "/";
+  }
+
+  return pathApi.sep;
+}
+
+function trimTrailingCompletionSeparator(
+  relativeBase: string,
+  pathApi: CompletionPathApi,
+) {
+  if (!/[\\/]+$/.test(relativeBase)) {
+    return relativeBase;
+  }
+
+  const root = pathApi.parse(relativeBase).root;
+
+  if (relativeBase.length <= root.length) {
+    return relativeBase;
+  }
+
+  const trimmed = relativeBase.replace(/[\\/]+$/, "");
+
+  return trimmed.length < root.length ? root : trimmed;
+}
+
+function looksLikeWindowsPath(value: string) {
+  return /^[A-Za-z]:(?:[\\/]|$)/.test(value) || value.startsWith("\\\\");
+}
+
+function isExistingDirectory(candidate: string) {
+  return fs.statSync(candidate).isDirectory();
 }
 
 function extractPrimaryCommand(tokens: string[]) {

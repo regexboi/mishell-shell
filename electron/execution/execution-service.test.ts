@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   createOutputPreview,
+  getCompletionContext,
   parseExecutionOutput,
   shouldUseTerminalMode,
 } from "./execution-service";
@@ -52,5 +53,50 @@ describe("shouldUseTerminalMode", () => {
     expect(shouldUseTerminalMode("pnpm check")).toBe(false);
     expect(shouldUseTerminalMode("git status --short")).toBe(false);
     expect(shouldUseTerminalMode("vim --help")).toBe(false);
+  });
+});
+
+describe("path completion parsing", () => {
+  it("parses Windows drive-root tokens with native separators", () => {
+    const context = getCompletionContext("cd C:\\Us", "C:\\repo", {
+      isDirectory: (candidate) => candidate === "C:\\",
+    });
+
+    expect(context).toEqual(
+      expect.objectContaining({
+        prefix: "Us",
+        relativeBase: "C:\\",
+        searchDirectory: "C:\\",
+        separator: "\\",
+      }),
+    );
+  });
+
+  it("parses Windows relative paths with backslash separators", () => {
+    const context = getCompletionContext("type .\\src\\ma", "C:\\repo", {
+      isDirectory: (candidate) => candidate === "C:\\repo\\src",
+    });
+
+    expect(context).toEqual(
+      expect.objectContaining({
+        prefix: "ma",
+        relativeBase: ".\\src\\",
+        searchDirectory: "C:\\repo\\src",
+        separator: "\\",
+      }),
+    );
+  });
+
+  it("keeps / as the completion base for filesystem-root lookups", () => {
+    const context = getCompletionContext("cd /Us", "/tmp/project");
+
+    expect(context).toEqual(
+      expect.objectContaining({
+        prefix: "Us",
+        relativeBase: "/",
+        searchDirectory: "/",
+        separator: "/",
+      }),
+    );
   });
 });
