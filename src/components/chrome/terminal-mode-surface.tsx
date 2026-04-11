@@ -49,6 +49,9 @@ export function TerminalModeSurface({
 
     async function mountTerminal() {
       try {
+        setLoadError(null);
+        hostRef.current?.replaceChildren();
+
         const ghostty = await import("ghostty-web");
 
         await ghostty.init();
@@ -117,7 +120,7 @@ export function TerminalModeSurface({
   }, [executionId, onInput, onReady, onResize, theme]);
 
   return (
-    <div className="relative h-full min-h-[420px] border border-[color:var(--border-strong)] bg-[color:var(--bg)]">
+    <div className="relative h-full min-h-0 bg-[color:var(--bg)]">
       <div ref={hostRef} className="h-full w-full overflow-hidden" />
       {loadError ? (
         <div className="absolute inset-0 grid place-items-center px-6 text-center text-sm text-amber-100">

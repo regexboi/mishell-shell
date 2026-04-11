@@ -17,7 +17,6 @@ import {
   GitBranch,
   Search,
   Settings,
-  TerminalSquare,
   Timer,
   TriangleAlert,
 } from "lucide-react";
@@ -230,9 +229,6 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     (execution) => execution.status === "running",
   );
   const latestExecution = executions[0] ?? null;
-  const activeTerminalExecution = activeTerminalExecutionId
-    ? executions.find((execution) => execution.id === activeTerminalExecutionId) ?? null
-    : null;
   const fullOutputExecution = fullOutputExecutionId
     ? executions.find((execution) => execution.id === fullOutputExecutionId) ?? null
     : null;
@@ -333,6 +329,8 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
       return;
     }
 
+    controller.clear();
+
     for (const chunk of backlog) {
       controller.write(chunk);
     }
@@ -378,6 +376,12 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
 
   const handleExecutionEvent = useEffectEvent((event: ExecutionEvent) => {
     if (event.type === "started") {
+      if (event.execution.presentation === "terminal") {
+        terminalOutputBacklogRef.current.set(event.execution.id, [
+          TERMINAL_SESSION_RESET,
+        ]);
+      }
+
       setExecutions((current) => [event.execution, ...current]);
       return;
     }
@@ -390,8 +394,9 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         ) {
           terminalControllerRef.current.write(event.chunk);
         } else {
-          const backlog =
-            terminalOutputBacklogRef.current.get(event.executionId) ?? [];
+          const backlog = terminalOutputBacklogRef.current.get(event.executionId) ?? [
+            TERMINAL_SESSION_RESET,
+          ];
           backlog.push(event.chunk);
           terminalOutputBacklogRef.current.set(event.executionId, backlog);
         }
@@ -1189,57 +1194,30 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
           <div className="min-h-0 min-w-0 flex-1" aria-hidden />
         </div>
 
-        <div className="mx-auto flex min-h-0 w-full max-w-[1920px] flex-1 flex-col gap-4 overflow-hidden px-4 py-3 sm:px-6 lg:px-8">
-          <main className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+        <div
+          className={cn(
+            "flex min-h-0 w-full flex-1 flex-col overflow-hidden",
+            activeTerminalExecutionId
+              ? "gap-0 px-0 py-0"
+              : "mx-auto max-w-[1920px] gap-4 px-4 py-3 sm:px-6 lg:px-8",
+          )}
+        >
+          <main
+            className={cn(
+              "flex min-h-0 flex-1 flex-col overflow-hidden",
+              activeTerminalExecutionId ? "gap-0" : "gap-4",
+            )}
+          >
             {activeTerminalExecutionId ? (
-              <section className="grid min-h-0 flex-1 gap-4 overflow-hidden">
-                <Panel
-                  icon={TerminalSquare}
-                  title="Terminal Mode"
-                  kicker="Compatibility active"
-                >
-                  <div className="space-y-4">
-                    <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_260px]">
-                      <div className="space-y-2 text-sm text-[color:var(--text-secondary)]">
-                        <p>
-                          Mishell detected an interactive command and shifted the
-                          session into the raw compatibility surface. Input now
-                          streams directly to the PTY until the process exits.
-                        </p>
-                        <p>
-                          `Ctrl+C` is passed through to the active program. When it
-                          returns, focus drops back to the custom editor and the
-                          history/card pipeline stays intact.
-                        </p>
-                      </div>
-                      <div className="grid gap-2 text-xs uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
-                        <div className="flex items-center justify-between border border-[color:var(--border)] px-3 py-2">
-                          <span>Command</span>
-                          <span className="truncate text-right text-[color:var(--text-primary)]">
-                            {activeTerminalExecution?.commandText ?? "connecting"}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between border border-[color:var(--border)] px-3 py-2">
-                          <span>cwd</span>
-                          <span className="truncate text-right text-[color:var(--text-primary)]">
-                            {shellContext.displayCwd}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between border border-[color:var(--border)] px-3 py-2">
-                          <span>Shortcut</span>
-                          <span className="text-[color:var(--accent)]">Ctrl+C</span>
-                        </div>
-                      </div>
-                    </div>
-                    <TerminalModeSurface
-                      executionId={activeTerminalExecutionId}
-                      onInput={handleTerminalInput}
-                      onReady={handleTerminalReady}
-                      onResize={handleTerminalResize}
-                      theme={activeTheme.terminalTheme}
-                    />
-                  </div>
-                </Panel>
+              <section className="min-h-0 flex-1 overflow-hidden">
+                <TerminalModeSurface
+                  key={activeTerminalExecutionId}
+                  executionId={activeTerminalExecutionId}
+                  onInput={handleTerminalInput}
+                  onReady={handleTerminalReady}
+                  onResize={handleTerminalResize}
+                  theme={activeTheme.terminalTheme}
+                />
               </section>
             ) : (
               <>
@@ -1437,6 +1415,7 @@ const EDITOR_MIN_HEIGHT =
   EDITOR_MIN_LINES * EDITOR_LINE_HEIGHT_PX + EDITOR_VERTICAL_PAD_PX;
 const EDITOR_MAX_HEIGHT =
   EDITOR_MAX_LINES * EDITOR_LINE_HEIGHT_PX + EDITOR_VERTICAL_PAD_PX;
+const TERMINAL_SESSION_RESET = "\u001bc\u001b[3J\u001b[2J\u001b[H";
 
 const ShellEditor = ({
   autocompleteItems,
@@ -2081,38 +2060,6 @@ function HistorySearchDialog({
         </div>
       </div>
     </DialogContent>
-  );
-}
-
-function Panel({
-  icon: Icon,
-  title,
-  kicker,
-  action,
-  children,
-}: {
-  icon: typeof Command;
-  title: string;
-  kicker: string;
-  action?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="border border-[color:var(--border)] bg-[color:var(--panel)]">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[color:var(--border)] px-4 py-3">
-        <div>
-          <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.28em] text-[color:var(--text-muted)]">
-            <Icon className="h-3.5 w-3.5 text-[color:var(--accent)]" />
-            {kicker}
-          </div>
-          <h2 className="mt-2 font-display text-xl uppercase tracking-[0.16em] text-[color:var(--text-primary)]">
-            {title}
-          </h2>
-        </div>
-        {action}
-      </div>
-      <div className="p-4">{children}</div>
-    </section>
   );
 }
 
