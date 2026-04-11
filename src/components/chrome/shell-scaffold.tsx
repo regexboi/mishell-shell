@@ -4,6 +4,7 @@ import {
   useDeferredValue,
   useEffect,
   useEffectEvent,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -31,6 +32,7 @@ import type {
   HistoryAutocompleteItem,
   HistoryEntry,
   HistoryRecallItem,
+  PathCompletionItem,
   ShellContext,
   ShellSurface,
 } from "@shared/contracts";
@@ -85,7 +87,10 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const [autocompleteItems, setAutocompleteItems] = useState<
     HistoryAutocompleteItem[]
   >([]);
-  const [autocompleteIndex, setAutocompleteIndex] = useState(0);
+  const [pathCompletionItems, setPathCompletionItems] = useState<PathCompletionItem[]>(
+    [],
+  );
+  const [autocompleteIndex, setAutocompleteIndex] = useState<number | null>(null);
   const [historyQuery, setHistoryQuery] = useState("");
   const [historyResults, setHistoryResults] = useState<HistoryEntry[]>([]);
   const [historySelectedIndex, setHistorySelectedIndex] = useState(0);
@@ -116,10 +121,15 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const fullOutputExecution = fullOutputExecutionId
     ? executions.find((execution) => execution.id === fullOutputExecutionId) ?? null
     : null;
-  const autocompleteVisible =
+  const historyAutocompleteVisible =
     autocompleteItems.length > 0 && recallSessionRef.current === null;
+  const pathCompletionVisible =
+    pathCompletionItems.length > 0 && recallSessionRef.current === null;
+  const autocompleteVisible = historyAutocompleteVisible || pathCompletionVisible;
   const selectedAutocomplete =
-    autocompleteItems[autocompleteIndex] ?? autocompleteItems[0] ?? null;
+    autocompleteIndex === null ? null : autocompleteItems[autocompleteIndex] ?? null;
+  const selectedPathCompletion =
+    autocompleteIndex === null ? null : pathCompletionItems[autocompleteIndex] ?? null;
 
   const focusEditorAtEnd = useEffectEvent(() => {
     requestAnimationFrame(() => {
@@ -137,6 +147,8 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     (nextValue: string, source: "history" | "system" | "user" = "user") => {
       if (source === "user") {
         recallSessionRef.current = null;
+        setPathCompletionItems([]);
+        setAutocompleteIndex(null);
       }
 
       if (source !== "history") {
@@ -148,9 +160,29 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   );
 
   const applyAutocompleteSelection = useEffectEvent((commandText: string) => {
+    const normalizedCommand = commandText.trim().toLocaleLowerCase();
+    const continuationItems = autocompleteItems.filter((item) => {
+      const normalizedItem = item.commandText.trim().toLocaleLowerCase();
+      return (
+        normalizedItem !== normalizedCommand &&
+        normalizedItem.startsWith(normalizedCommand)
+      );
+    });
+
     recallSessionRef.current = null;
     setDraftValue(commandText, "system");
-    setAutocompleteIndex(0);
+    setAutocompleteItems(continuationItems);
+    setPathCompletionItems([]);
+    setAutocompleteIndex(null);
+    focusEditorAtEnd();
+  });
+
+  const applyPathCompletionSelection = useEffectEvent((item: PathCompletionItem) => {
+    recallSessionRef.current = null;
+    setPathCompletionItems([]);
+    setAutocompleteItems([]);
+    setAutocompleteIndex(null);
+    setDraftValue(item.nextValue, "system");
     focusEditorAtEnd();
   });
 
@@ -159,7 +191,8 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     setDraftValue(commandText, "history");
     setHistoryOpen(false);
     setAutocompleteItems([]);
-    setAutocompleteIndex(0);
+    setPathCompletionItems([]);
+    setAutocompleteIndex(null);
     focusEditorAtEnd();
   });
 
@@ -320,14 +353,26 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   useEffect(() => {
     window.addEventListener("keydown", handleHistoryShortcut, { capture: true });
 
-    editorRef.current?.focus();
-
     return () => {
       window.removeEventListener("keydown", handleHistoryShortcut, {
         capture: true,
       });
     };
   }, [handleHistoryShortcut]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      if (historyOpen || activeTerminalExecutionId || !editorRef.current) {
+        return;
+      }
+
+      editorRef.current.focus();
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [activeTerminalExecutionId, historyOpen]);
 
   useEffect(() => {
     if (!copyToast) {
@@ -344,26 +389,11 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   }, [copyToast]);
 
   useEffect(() => {
-    if (!historyOpen) {
-      return;
-    }
-
-    const frame = window.requestAnimationFrame(() => {
-      historySearchInputRef.current?.focus();
-      historySearchInputRef.current?.select();
-    });
-
-    return () => {
-      window.cancelAnimationFrame(frame);
-    };
-  }, [historyOpen]);
-
-  useEffect(() => {
     const normalizedDraft = deferredDraft.trim();
 
     if (!normalizedDraft) {
       setAutocompleteItems([]);
-      setAutocompleteIndex(0);
+      setAutocompleteIndex(null);
       return;
     }
 
@@ -383,7 +413,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
 
         startTransition(() => {
           setAutocompleteItems(response.items);
-          setAutocompleteIndex(0);
+          setAutocompleteIndex(null);
         });
       })
       .catch(() => {
@@ -392,7 +422,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         }
 
         setAutocompleteItems([]);
-        setAutocompleteIndex(0);
+        setAutocompleteIndex(null);
       });
   }, [api, deferredDraft, historyRefreshKey, shellContext.cwd]);
 
@@ -448,6 +478,28 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     shellContext.cwd,
   ]);
 
+  useLayoutEffect(() => {
+    if (!historyOpen) {
+      return;
+    }
+
+    const input = historySearchInputRef.current;
+
+    if (!input) {
+      return;
+    }
+
+    if (document.activeElement !== input) {
+      input.focus({ preventScroll: true });
+    }
+
+    const cursor = input.value.length;
+
+    if (input.selectionStart !== cursor || input.selectionEnd !== cursor) {
+      input.setSelectionRange(cursor, cursor);
+    }
+  }, [historyOpen, historyQuery]);
+
   const submitCommand = useEffectEvent(async () => {
     const commandText = draft.trim();
 
@@ -458,7 +510,8 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     setIsSubmitting(true);
     recallSessionRef.current = null;
     setAutocompleteItems([]);
-    setAutocompleteIndex(0);
+    setPathCompletionItems([]);
+    setAutocompleteIndex(null);
     setHistoryOpen(false);
     setDraft("");
     let responseMode: "card" | "terminal" | null = null;
@@ -504,11 +557,19 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   });
 
   const navigateAutocomplete = useEffectEvent((direction: "next" | "prev") => {
-    if (!autocompleteVisible) {
+    if (!historyAutocompleteVisible) {
       return false;
     }
 
     setAutocompleteIndex((current) => {
+      if (autocompleteItems.length === 0) {
+        return null;
+      }
+
+      if (current === null) {
+        return direction === "next" ? 0 : autocompleteItems.length - 1;
+      }
+
       const nextIndex =
         direction === "next"
           ? current + 1
@@ -522,12 +583,106 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     return true;
   });
 
+  const navigatePathCompletions = useEffectEvent(
+    (direction: "next" | "prev") => {
+      if (!pathCompletionVisible) {
+        return false;
+      }
+
+      setAutocompleteIndex((current) => {
+        if (pathCompletionItems.length === 0) {
+          return null;
+        }
+
+        if (current === null) {
+          return direction === "next" ? 0 : pathCompletionItems.length - 1;
+        }
+
+        const nextIndex =
+          direction === "next"
+            ? current + 1
+            : current <= 0
+              ? pathCompletionItems.length - 1
+              : current - 1;
+
+        return clampIndex(nextIndex, pathCompletionItems.length);
+      });
+
+      return true;
+    },
+  );
+
+  const requestAutocomplete = useEffectEvent(async () => {
+    const normalizedDraft = draft.trim();
+
+    if (!normalizedDraft) {
+      setAutocompleteItems([]);
+      setAutocompleteIndex(null);
+      return false;
+    }
+
+    const requestId = autocompleteRequestRef.current + 1;
+    autocompleteRequestRef.current = requestId;
+
+    try {
+      const response = await api.history.getAutocomplete({
+        draft: normalizedDraft,
+        cwd: shellContext.cwd,
+        limit: 6,
+      });
+
+      if (autocompleteRequestRef.current !== requestId) {
+        return false;
+      }
+
+      startTransition(() => {
+        setAutocompleteItems(response.items);
+        setPathCompletionItems([]);
+        setAutocompleteIndex(null);
+      });
+
+      return response.items.length > 0;
+    } catch {
+      if (autocompleteRequestRef.current !== requestId) {
+        return false;
+      }
+
+      setAutocompleteItems([]);
+      setAutocompleteIndex(null);
+      return false;
+    }
+  });
+
+  const requestPathCompletions = useEffectEvent(async () => {
+    const response = await api.app.getPathCompletions({
+      draft,
+      cwd: shellContext.cwd,
+      limit: 24,
+    });
+
+    startTransition(() => {
+      setPathCompletionItems(response.items);
+      setAutocompleteIndex(null);
+    });
+
+    return response.items.length > 0;
+  });
+
   const acceptAutocomplete = useEffectEvent(() => {
     if (!selectedAutocomplete) {
       return false;
     }
 
     applyAutocompleteSelection(selectedAutocomplete.commandText);
+    return true;
+  });
+
+  const acceptPathCompletion = useEffectEvent(() => {
+    if (!selectedPathCompletion) {
+      return false;
+    }
+
+    applyPathCompletionSelection(selectedPathCompletion);
     return true;
   });
 
@@ -603,12 +758,53 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const handleEditorKeyDown = useEffectEvent(
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (
+        event.key === "Enter" &&
+        !event.shiftKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        pathCompletionVisible &&
+        autocompleteIndex !== null
+      ) {
+        event.preventDefault();
+        acceptPathCompletion();
+        return true;
+      }
+
+      if (
+        event.key === "Enter" &&
+        !event.shiftKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        historyAutocompleteVisible &&
+        autocompleteIndex !== null
+      ) {
+        event.preventDefault();
+        acceptAutocomplete();
+        return true;
+      }
+
+      if (
         event.key === "ArrowDown" &&
         !event.shiftKey &&
         !event.metaKey &&
         !event.ctrlKey &&
         !event.altKey &&
-        autocompleteVisible
+        pathCompletionVisible
+      ) {
+        event.preventDefault();
+        navigatePathCompletions("next");
+        return true;
+      }
+
+      if (
+        event.key === "ArrowDown" &&
+        !event.shiftKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        historyAutocompleteVisible
       ) {
         event.preventDefault();
         navigateAutocomplete("next");
@@ -620,11 +816,52 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         !event.shiftKey &&
         !event.metaKey &&
         !event.ctrlKey &&
-        !event.altKey &&
-        autocompleteVisible
+        !event.altKey
       ) {
         event.preventDefault();
-        acceptAutocomplete();
+        const pathPreferred = /\s$/.test(draft) || /\/[^/\s]*$/.test(draft);
+
+        if (pathPreferred) {
+          if (pathCompletionVisible) {
+            navigatePathCompletions("next");
+            return true;
+          }
+
+          void requestPathCompletions();
+          return true;
+        }
+
+        if (pathCompletionVisible) {
+          navigatePathCompletions("next");
+          return true;
+        }
+
+        if (historyAutocompleteVisible) {
+          if (autocompleteIndex === null) {
+            navigateAutocomplete("next");
+            return true;
+          }
+
+          if (
+            selectedAutocomplete &&
+            selectedAutocomplete.commandText.trim() === draft.trim() &&
+            autocompleteItems.length > 1
+          ) {
+            navigateAutocomplete("next");
+            return true;
+          }
+
+          acceptAutocomplete();
+          return true;
+        }
+
+        void requestAutocomplete().then((didFindHistory) => {
+          if (didFindHistory) {
+            return;
+          }
+
+          void requestPathCompletions();
+        });
         return true;
       }
 
@@ -864,12 +1101,20 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                         }}
                       />
                     </div>
-                    <AutocompleteRail
-                      items={autocompleteItems}
-                      selectedIndex={autocompleteIndex}
-                      visible={autocompleteVisible}
-                      onSelect={applyAutocompleteSelection}
-                    />
+                    {pathCompletionVisible ? (
+                      <PathCompletionRail
+                        items={pathCompletionItems}
+                        selectedIndex={autocompleteIndex}
+                        onSelect={applyPathCompletionSelection}
+                      />
+                    ) : (
+                      <AutocompleteRail
+                        items={autocompleteItems}
+                        selectedIndex={autocompleteIndex}
+                        visible={autocompleteVisible}
+                        onSelect={applyAutocompleteSelection}
+                      />
+                    )}
                     <div className="flex flex-wrap gap-2">
                       {exampleCommands.map((commandText) => (
                         <Button
@@ -1149,7 +1394,7 @@ const ShellEditor = ({
           renderHighlightedCommand(value)
         ) : (
           <span className="text-[color:var(--text-muted)]">
-            Type a shell command. `Enter` runs it. `Tab` accepts history. `Shift+Enter` inserts a new line.
+            Type a shell command. `Enter` runs it. `Tab` opens completions. `Shift+Enter` inserts a new line.
           </span>
         )}
       </pre>
@@ -1331,7 +1576,7 @@ function AutocompleteRail({
   onSelect,
 }: {
   items: HistoryAutocompleteItem[];
-  selectedIndex: number;
+  selectedIndex: number | null;
   visible: boolean;
   onSelect: (commandText: string) => void;
 }) {
@@ -1339,7 +1584,7 @@ function AutocompleteRail({
     return (
       <div className="flex items-center justify-between gap-3 border border-[color:var(--border)] bg-black/20 px-4 py-3 text-[11px] uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
         <span>Autocomplete idle</span>
-        <span>Tab accepts when a history match exists</span>
+        <span>Tab opens when a history match exists</span>
       </div>
     );
   }
@@ -1348,7 +1593,7 @@ function AutocompleteRail({
     <div className="border border-[color:var(--border)] bg-black/20">
       <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-4 py-3 text-[11px] uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
         <span>{items.length} history matches</span>
-        <span>tab accept / arrow down cycle / cmd+ctrl+r search</span>
+        <span>tab open / accept / arrow down cycle / cmd+ctrl+r search</span>
       </div>
       <div className="grid gap-px bg-[color:var(--border)]">
         {items.map((item, index) => (
@@ -1356,7 +1601,8 @@ function AutocompleteRail({
             key={`${item.commandText}-${item.lastStartedAt}`}
             className={cn(
               "grid gap-2 bg-[color:var(--panel-muted)] px-4 py-3 text-left transition",
-              index === selectedIndex &&
+              selectedIndex !== null &&
+                index === selectedIndex &&
                 "bg-[color:color-mix(in_srgb,var(--accent)_8%,var(--panel-muted))]",
             )}
             onMouseDown={(event) => {
@@ -1376,6 +1622,54 @@ function AutocompleteRail({
               <span>{item.cwd}</span>
               <span>used {item.usageCount}x</span>
               <span>exit {item.lastExitCode ?? "?"}</span>
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PathCompletionRail({
+  items,
+  selectedIndex,
+  onSelect,
+}: {
+  items: PathCompletionItem[];
+  selectedIndex: number | null;
+  onSelect: (item: PathCompletionItem) => void;
+}) {
+  return (
+    <div className="border border-[color:var(--border)] bg-black/20">
+      <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-4 py-3 text-[11px] uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
+        <span>{items.length} path matches</span>
+        <span>tab / arrow down cycle / enter accept</span>
+      </div>
+      <div className="grid gap-px bg-[color:var(--border)]">
+        {items.map((item, index) => (
+          <button
+            key={`${item.path}-${item.label}`}
+            className={cn(
+              "grid gap-2 bg-[color:var(--panel-muted)] px-4 py-3 text-left transition",
+              selectedIndex !== null &&
+                index === selectedIndex &&
+                "bg-[color:color-mix(in_srgb,var(--accent)_8%,var(--panel-muted))]",
+            )}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              onSelect(item);
+            }}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-mono text-sm text-[color:var(--text-primary)]">
+                {item.label}
+              </span>
+              <span className="text-[11px] uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
+                {item.isDirectory ? "folder" : "file"}
+              </span>
+            </div>
+            <div className="text-xs text-[color:var(--text-secondary)]">
+              {item.path}
             </div>
           </button>
         ))}
@@ -1410,7 +1704,12 @@ function HistorySearchDialog({
   const selectedResult = results[selectedIndex] ?? results[0] ?? null;
 
   return (
-    <DialogContent className="w-[min(94vw,1180px)]">
+    <DialogContent
+      className="w-[min(94vw,1180px)]"
+      onOpenAutoFocus={(event) => {
+        event.preventDefault();
+      }}
+    >
       <DialogHeader>
         <DialogTitle>History Search</DialogTitle>
         <DialogDescription>
