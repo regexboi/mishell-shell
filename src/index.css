@@ -87,3 +87,38 @@
     font: inherit;
   }
 }
+
+@layer utilities {
+  /**
+   * Slim scrollbar, no track fill, thumb only on hover / focus-within (WebKit + Firefox).
+   * Keeps gutter minimal so the thumb reads as overlay-style.
+   */
+  .mishell-overlay-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  .mishell-overlay-scroll:hover,
+  .mishell-overlay-scroll:focus-within {
+    scrollbar-color: color-mix(in srgb, var(--accent) 52%, transparent) transparent;
+  }
+
+  .mishell-overlay-scroll::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+
+  .mishell-overlay-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .mishell-overlay-scroll::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 9999px;
+  }
+
+  .mishell-overlay-scroll:hover::-webkit-scrollbar-thumb,
+  .mishell-overlay-scroll:focus-within::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--accent) 52%, transparent);
+  }
+}

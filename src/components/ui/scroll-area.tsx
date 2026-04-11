@@ -9,7 +9,10 @@ function ScrollArea({
 }: React.ComponentProps<typeof ScrollAreaPrimitive.Root>) {
   return (
     <ScrollAreaPrimitive.Root
-      className={cn("relative overflow-hidden", className)}
+      className={cn(
+        "group/mishell-scroll relative overflow-hidden",
+        className,
+      )}
       {...props}
     >
       <ScrollAreaPrimitive.Viewport className="h-full w-full rounded-none">
@@ -30,14 +33,14 @@ function ScrollBar({
     <ScrollAreaPrimitive.ScrollAreaScrollbar
       orientation={orientation}
       className={cn(
-        "flex touch-none select-none bg-transparent p-1 transition-colors",
-        orientation === "vertical" && "h-full w-3 border-l border-l-transparent",
-        orientation === "horizontal" && "h-3 flex-col border-t border-t-transparent",
+        "flex touch-none select-none bg-transparent p-0 opacity-0 transition-opacity duration-150 group-hover/mishell-scroll:opacity-100 group-focus-within/mishell-scroll:opacity-100",
+        orientation === "vertical" && "h-full w-1",
+        orientation === "horizontal" && "h-1 w-full flex-col",
         className,
       )}
       {...props}
     >
-      <ScrollAreaPrimitive.ScrollAreaThumb className="relative flex-1 rounded-none bg-[color:var(--accent-dim)]" />
+      <ScrollAreaPrimitive.ScrollAreaThumb className="relative flex-1 rounded-full bg-[color:color-mix(in_srgb,var(--accent)_52%,transparent)]" />
     </ScrollAreaPrimitive.ScrollAreaScrollbar>
   );
 }

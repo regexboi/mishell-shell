@@ -5,21 +5,18 @@ import {
   useEffect,
   useEffectEvent,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
+import type { CSSProperties } from "react";
 import {
-  Binary,
   Check,
   Clipboard,
   Command,
-  Database,
   FolderTree,
   GitBranch,
-  History,
-  LayoutPanelTop,
   Search,
+  Settings,
   TerminalSquare,
   Timer,
   TriangleAlert,
@@ -34,7 +31,6 @@ import type {
   HistoryRecallItem,
   PathCompletionItem,
   ShellContext,
-  ShellSurface,
 } from "@shared/contracts";
 
 import { Button } from "@/components/ui/button";
@@ -47,7 +43,6 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
 import { getMishellApi } from "@/lib/mishell-api";
 import { shouldRequestPathCompletions } from "@/lib/path-completion";
 import { cn } from "@/lib/utils";
@@ -56,8 +51,6 @@ import {
   TerminalModeSurface,
   type TerminalModeSurfaceController,
 } from "./terminal-mode-surface";
-
-const exampleCommands = ["pwd", "git status --short", "pnpm check", "ls -la"];
 
 type MishellThemeId = "ultraviolet" | "phosphor" | "amber";
 
@@ -231,21 +224,15 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const deferredDraft = useDeferredValue(draft);
   const deferredHistoryQuery = useDeferredValue(historyQuery);
   const isBrowserPreview = bootstrap.platform === "browser-preview";
+  const isMacTrafficLightInset =
+    !isBrowserPreview && bootstrap.platform.startsWith("darwin");
   const hasRunningExecution = executions.some(
     (execution) => execution.status === "running",
   );
-  const activeSurfaceId = activeTerminalExecutionId
-    ? "terminal"
-    : historyOpen
-      ? "history"
-      : bootstrap.focusMode.defaultSurface;
   const latestExecution = executions[0] ?? null;
   const activeTerminalExecution = activeTerminalExecutionId
     ? executions.find((execution) => execution.id === activeTerminalExecutionId) ?? null
     : null;
-  const highlightedSurface = bootstrap.surfaces.find(
-    (surface) => surface.id === activeSurfaceId,
-  );
   const fullOutputExecution = fullOutputExecutionId
     ? executions.find((execution) => execution.id === fullOutputExecutionId) ?? null
     : null;
@@ -253,7 +240,6 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     autocompleteItems.length > 0 && recallSessionRef.current === null;
   const pathCompletionVisible =
     pathCompletionItems.length > 0 && recallSessionRef.current === null;
-  const autocompleteVisible = historyAutocompleteVisible || pathCompletionVisible;
   const selectedAutocomplete =
     autocompleteIndex === null ? null : autocompleteItems[autocompleteIndex] ?? null;
   const selectedPathCompletion =
@@ -1095,128 +1081,82 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     }
   });
 
-  const executionCountLabel = useMemo(() => {
-    if (executions.length === 0) {
-      return "No cards yet";
-    }
-
-    return `${executions.length} card${executions.length === 1 ? "" : "s"}`;
-  }, [executions.length]);
+  const titleBarStyle = {
+    WebkitAppRegion: "drag",
+  } as CSSProperties;
+  const titleBarControlStyle = {
+    WebkitAppRegion: "no-drag",
+  } as CSSProperties;
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[color:var(--bg)] text-[color:var(--text-primary)]">
+    <div className="relative flex h-dvh max-h-dvh flex-col overflow-hidden bg-[color:var(--bg)] text-[color:var(--text-primary)]">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,var(--glow-primary),transparent_30%),radial-gradient(circle_at_bottom_right,var(--glow-secondary),transparent_34%)]" />
       <div className="pointer-events-none absolute inset-0 opacity-40 [background-image:linear-gradient(var(--grid-line)_1px,transparent_1px),linear-gradient(90deg,var(--grid-line)_1px,transparent_1px)] [background-size:32px_32px]" />
-      <div className="relative mx-auto flex min-h-screen max-w-[1680px] flex-col px-4 py-4 sm:px-6 lg:px-8">
-        <header className="border border-[color:var(--border-strong)] bg-[color:var(--panel)] px-4 py-4 shadow-[0_0_0_1px_rgba(195,115,255,0.08),0_24px_72px_rgba(0,0,0,0.34)]">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center gap-3 text-[11px] uppercase tracking-[0.34em] text-[color:var(--text-muted)]">
-                <span className="inline-flex items-center gap-2">
-                  <span className="h-2 w-2 bg-[color:var(--accent)]" />
-                  V1 Release Candidate
-                </span>
-                <span>{bootstrap.platform}</span>
-                {isBrowserPreview ? (
-                  <span className="border border-[color:var(--border-strong)] px-2 py-1 text-[color:var(--accent)]">
-                    Browser only
-                  </span>
-                ) : null}
-              </div>
-              <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
-                <h1 className="font-display text-4xl uppercase tracking-[0.26em] sm:text-5xl">
-                  {bootstrap.appName}
-                </h1>
-                <p className="max-w-3xl text-sm text-[color:var(--text-secondary)] sm:text-base">
-                  Keyboard-first shell editing, card-based results, SQLite recall,
-                  and a dedicated raw terminal fallback now land together as the
-                  complete V1 workflow.
-                </p>
-                {isBrowserPreview ? (
-                  <p className="max-w-2xl text-xs uppercase tracking-[0.22em] text-[color:var(--accent)]">
-                    Preview fallback active. Launch Electron for the real
-                    `node-pty`, SQLite, and `ghostty-web` path.
-                  </p>
-                ) : null}
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[11px] uppercase tracking-[0.28em] text-[color:var(--text-muted)]">
+      <div className="relative flex min-h-0 w-full flex-1 flex-col">
+        <div
+          className={cn(
+            "flex h-9 shrink-0 items-center gap-1 border-b border-[color:var(--border)] bg-[color:var(--panel)]/75 backdrop-blur-[2px]",
+            isMacTrafficLightInset ? "pl-[76px]" : "pl-2",
+          )}
+          style={titleBarStyle}
+        >
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 shrink-0 px-0 text-[color:var(--text-muted)] hover:text-[color:var(--accent)]"
+                style={titleBarControlStyle}
+                aria-label="Settings"
+              >
+                <Settings className="h-4 w-4" strokeWidth={1.75} />
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="w-[min(92vw,272px)] gap-0 p-0">
+              <DialogHeader className="border-0 px-5 pb-0 pt-5">
+                <DialogTitle className="font-mono text-[10px] font-medium uppercase tracking-[0.22em] text-[color:var(--text-muted)]">
                   Theme
-                </span>
+                </DialogTitle>
+                <DialogDescription className="sr-only">
+                  Choose a color theme for Mishell.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex flex-col gap-1 px-3 pb-5 pt-4">
                 {themeOptions.map((theme) => (
-                  <Button
+                  <button
                     key={theme.id}
-                    variant={theme.id === activeTheme.id ? "accent" : "ghost"}
-                    size="sm"
+                    type="button"
                     onClick={() => {
                       setThemeId(theme.id);
                     }}
+                    className={cn(
+                      "flex items-center gap-3 border px-3 py-2.5 text-left transition-colors",
+                      theme.id === activeTheme.id
+                        ? "border-[color:var(--accent)] bg-[color:color-mix(in_srgb,var(--accent)_10%,transparent)]"
+                        : "border-[color:var(--border)] bg-transparent hover:border-[color:var(--border-strong)]",
+                    )}
                   >
-                    {theme.label}
-                  </Button>
+                    <span
+                      className="h-3.5 w-3.5 shrink-0 border border-[color:var(--border-strong)]"
+                      style={{ background: theme.terminalTheme.magenta }}
+                      aria-hidden
+                    />
+                    <span className="font-mono text-xs uppercase tracking-[0.14em] text-[color:var(--text-primary)]">
+                      {theme.label}
+                    </span>
+                  </button>
                 ))}
               </div>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-4">
-              <Metric label="Shell" value={shellContext.shellName} icon={Command} />
-              <Metric
-                label="Branch"
-                value={shellContext.gitBranch ?? "No repo"}
-                icon={GitBranch}
-              />
-              <Metric label="Cards" value={executionCountLabel} icon={LayoutPanelTop} />
-              <Metric
-                label="Focus"
-                value={highlightedSurface?.label ?? "Editor"}
-                icon={Database}
-              />
-            </div>
-          </div>
-        </header>
+            </DialogContent>
+          </Dialog>
+          <div className="min-h-0 min-w-0 flex-1" aria-hidden />
+        </div>
 
-        <div className="mt-4 grid flex-1 gap-4 xl:grid-cols-[240px_minmax(0,1fr)_320px]">
-          <aside className="border border-[color:var(--border)] bg-[color:var(--panel-muted)]">
-            <div className="border-b border-[color:var(--border)] px-4 py-3">
-              <p className="font-display text-sm uppercase tracking-[0.28em]">Surfaces</p>
-              <p className="mt-1 text-xs text-[color:var(--text-muted)]">
-                Default shell remains custom
-              </p>
-            </div>
-            <nav className="flex flex-col">
-              {bootstrap.surfaces.map((surface) => (
-                <SurfaceRow
-                  key={surface.id}
-                  surface={surface}
-                  active={surface.id === activeSurfaceId}
-                />
-              ))}
-            </nav>
-            <Separator />
-            <div className="space-y-3 px-4 py-4 text-xs text-[color:var(--text-secondary)]">
-              <div className="flex items-center justify-between gap-3">
-                <span>DB Path</span>
-                <span className="truncate text-right text-[color:var(--text-muted)]">
-                  {bootstrap.database.path}
-                </span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span>Session</span>
-                <span className="text-[color:var(--text-muted)]">
-                  {shellContext.sessionId.slice(0, 8)}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span>Launch</span>
-                <span className="text-[color:var(--text-muted)]">
-                  {new Date(bootstrap.release.launchedAt).toLocaleTimeString()}
-                </span>
-              </div>
-            </div>
-          </aside>
-
-          <main className="grid gap-4">
+        <div className="mx-auto flex min-h-0 w-full max-w-[1920px] flex-1 flex-col gap-4 overflow-hidden px-4 py-3 sm:px-6 lg:px-8">
+          <main className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
             {activeTerminalExecutionId ? (
-              <section className="grid gap-4">
+              <section className="grid min-h-0 flex-1 gap-4 overflow-hidden">
                 <Panel
                   icon={TerminalSquare}
                   title="Terminal Mode"
@@ -1266,254 +1206,85 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                 </Panel>
               </section>
             ) : (
-              <section className="grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,0.9fr)]">
-                <Panel
-                  icon={Command}
-                  title="Shell Editor"
-                  kicker="Default surface"
-                  action={
-                    <Button
-                      variant="accent"
-                      disabled={hasRunningExecution || isSubmitting || !draft.trim()}
-                      onClick={() => {
+              <>
+                <section className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                  <div className="mishell-overlay-scroll min-h-0 flex-1 overflow-y-auto">
+                    {executions.length === 0 ? (
+                      <div className="border border-dashed border-[color:var(--border)] bg-[color:var(--panel-muted)] px-5 py-6 text-sm text-[color:var(--text-secondary)]">
+                        Run a command to create the first card. Good smoke checks
+                        are `pwd`, `git status --short`, a failing command like
+                        `false`, and `vim README.md` to confirm terminal-mode
+                        fallback.
+                      </div>
+                    ) : (
+                      <div className="flex min-w-0 flex-col divide-y divide-[color:var(--border)]">
+                        {executions.map((execution) => (
+                          <CommandCard
+                            key={execution.id}
+                            execution={execution}
+                            onCopyCommand={() => {
+                              void copyText(execution.commandText, "Command");
+                            }}
+                            onCopyOutput={() => {
+                              void copyText(execution.output, "Output");
+                            }}
+                            onCopyBoth={() => {
+                              void copyText(
+                                `cmd: ${execution.commandText}\nout: ${execution.output}`,
+                                "Command + output",
+                              );
+                            }}
+                            onOpenFullOutput={() => {
+                              setFullOutputExecutionId(execution.id);
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </section>
+
+                <section className="shrink-0">
+                  <div className="border border-[color:var(--border-strong)] bg-[linear-gradient(180deg,rgba(18,18,25,0.82),rgba(10,10,16,0.96))]">
+                    <ShellHeader
+                      shellContext={shellContext}
+                      latestExecution={latestExecution}
+                    />
+                    <ShellEditor
+                      ref={editorRef}
+                      value={draft}
+                      disabled={hasRunningExecution || isSubmitting}
+                      onChange={(nextValue) => {
+                        setDraftValue(nextValue, "user");
+                      }}
+                      onKeyDown={handleEditorKeyDown}
+                      onSubmit={() => {
                         void submitCommand();
                       }}
-                    >
-                      {hasRunningExecution || isSubmitting ? "Running" : "Run Enter"}
-                    </Button>
-                  }
-                >
-                  <div className="space-y-4">
-                    <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.28em] text-[color:var(--text-muted)]">
-                      <span className="border border-[color:var(--border-strong)] px-2 py-1 text-[color:var(--accent)]">
-                        PTY-backed
-                      </span>
-                      <span>Free cursor placement</span>
-                      <span>Autocomplete from SQLite</span>
-                      <span>Up arrow = cwd recall</span>
-                      <span>Ctrl+C clears draft</span>
-                      <span>Shift+Enter for newline</span>
-                    </div>
-                    <div className="border border-[color:var(--border-strong)] bg-[linear-gradient(180deg,rgba(18,18,25,0.82),rgba(10,10,16,0.96))]">
-                      <ShellHeader
-                        shellContext={shellContext}
-                        latestExecution={latestExecution}
-                      />
-                      <ShellEditor
-                        ref={editorRef}
-                        value={draft}
-                        disabled={hasRunningExecution || isSubmitting}
-                        onChange={(nextValue) => {
-                          setDraftValue(nextValue, "user");
-                        }}
-                        onKeyDown={handleEditorKeyDown}
-                        onSubmit={() => {
-                          void submitCommand();
-                        }}
-                      />
-                    </div>
-                    {pathCompletionVisible ? (
-                      <PathCompletionRail
-                        items={pathCompletionItems}
-                        selectedIndex={autocompleteIndex}
-                        onSelect={applyPathCompletionSelection}
-                      />
-                    ) : (
-                      <AutocompleteRail
-                        items={autocompleteItems}
-                        selectedIndex={autocompleteIndex}
-                        visible={autocompleteVisible}
-                        onSelect={applyAutocompleteSelection}
-                      />
-                    )}
-                    <div className="flex flex-wrap gap-2">
-                      {exampleCommands.map((commandText) => (
-                        <Button
-                          key={commandText}
-                          variant="ghost"
-                          size="sm"
-                          disabled={hasRunningExecution || isSubmitting}
-                          onClick={() => {
-                            applyAutocompleteSelection(commandText);
-                          }}
-                        >
-                          {commandText}
-                        </Button>
-                      ))}
-                    </div>
+                    />
                   </div>
-                </Panel>
-
-                <Panel
-                  icon={TerminalSquare}
-                  title="Terminal Compatibility"
-                  kicker="Fallback surface"
-                >
-                  <div className="flex h-full flex-col justify-between gap-6">
-                    <div className="space-y-3 text-sm text-[color:var(--text-secondary)]">
-                      <p>
-                        Normal execution stays in cards. The raw terminal surface
-                        only appears for commands that look like interactive TUIs
-                        such as `vim`, `lazygit`, `codex`, `ssh`, or a shell REPL.
-                      </p>
-                      <p>
-                        Detection stays heuristic by command prefix in V1. That
-                        keeps normal shell work card-first instead of letting
-                        routine commands drift into raw terminal mode.
-                      </p>
-                    </div>
-                    <div className="border border-[color:var(--border)] bg-black/30 p-4 font-mono text-xs uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
-                      standby / compatibility layer / interactive flows only
-                    </div>
-                  </div>
-                </Panel>
-              </section>
+                </section>
+              </>
             )}
 
-            <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
-              <Panel
-                icon={LayoutPanelTop}
-                title="Command Feed"
-                kicker="Structured result cards"
-              >
-                {executions.length === 0 ? (
-                  <div className="border border-dashed border-[color:var(--border)] bg-[color:var(--panel-muted)] px-5 py-6 text-sm text-[color:var(--text-secondary)]">
-                    Run a command to create the first card. Good smoke checks are
-                    `pwd`, `git status --short`, a failing command like `false`,
-                    and `vim README.md` to confirm terminal-mode fallback.
-                  </div>
-                ) : (
-                  <div className="grid gap-3">
-                    {executions.map((execution) => (
-                      <CommandCard
-                        key={execution.id}
-                        execution={execution}
-                        onCopyCommand={() => {
-                          void copyText(execution.commandText, "Command");
-                        }}
-                        onCopyOutput={() => {
-                          void copyText(execution.output, "Output");
-                        }}
-                        onCopyBoth={() => {
-                          void copyText(
-                            `cmd: ${execution.commandText}\nout: ${execution.output}`,
-                            "Command + output",
-                          );
-                        }}
-                        onOpenFullOutput={() => {
-                          setFullOutputExecutionId(execution.id);
-                        }}
-                      />
-                    ))}
-                  </div>
-                )}
-              </Panel>
-
-              <Panel
-                icon={History}
-                title="Recall"
-                kicker="History online"
-                action={
-                  <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
-                    <DialogTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setHistoryQuery(draft.trim());
-                          setHistorySelectedIndex(0);
-                        }}
-                      >
-                        Open Cmd/Ctrl+R
-                      </Button>
-                    </DialogTrigger>
-                    <HistorySearchDialog
-                      inputRef={historySearchInputRef}
-                      pending={historySearchPending}
-                      query={historyQuery}
-                      results={historyResults}
-                      selectedIndex={historySelectedIndex}
-                      error={historySearchError}
-                      currentCwd={shellContext.cwd}
-                      onChangeQuery={(nextValue) => {
-                        setHistoryQuery(nextValue);
-                        setHistorySelectedIndex(0);
-                      }}
-                      onChangeSelectedIndex={setHistorySelectedIndex}
-                      onSelectCommand={applyHistoryResult}
-                    />
-                  </Dialog>
-                }
-              >
-                <div className="space-y-4 text-sm text-[color:var(--text-secondary)]">
-                  <p>
-                    Recall now runs on the persisted SQLite history store. `Tab`
-                    prefers history matches first, then filesystem completions for
-                    POSIX or Windows-style paths, while `Cmd/Ctrl+R` opens global
-                    search and `ArrowUp` walks cwd-scoped recall.
-                  </p>
-                  <div className="grid gap-2 text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">
-                    <div className="flex items-center justify-between border border-[color:var(--border)] px-3 py-2">
-                      <span>Autocomplete</span>
-                      <span>{autocompleteVisible ? `${autocompleteItems.length} live` : "idle"}</span>
-                    </div>
-                    <div className="flex items-center justify-between border border-[color:var(--border)] px-3 py-2">
-                      <span>CWD Recall</span>
-                      <span>{shellContext.displayCwd}</span>
-                    </div>
-                    <div className="flex items-center justify-between border border-[color:var(--border)] px-3 py-2">
-                      <span>Global Search</span>
-                      <span>{historyResults.length} rows</span>
-                    </div>
-                  </div>
-                </div>
-              </Panel>
-            </section>
+            <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
+              <HistorySearchDialog
+                inputRef={historySearchInputRef}
+                pending={historySearchPending}
+                query={historyQuery}
+                results={historyResults}
+                selectedIndex={historySelectedIndex}
+                error={historySearchError}
+                currentCwd={shellContext.cwd}
+                onChangeQuery={(nextValue) => {
+                  setHistoryQuery(nextValue);
+                  setHistorySelectedIndex(0);
+                }}
+                onChangeSelectedIndex={setHistorySelectedIndex}
+                onSelectCommand={applyHistoryResult}
+              />
+            </Dialog>
           </main>
-
-          <aside className="grid gap-4">
-            <Panel icon={Database} title="Execution" kicker="Typed boundaries">
-              <div className="space-y-4 text-sm text-[color:var(--text-secondary)]">
-                <ArchitectureItem
-                  label="Main"
-                  description="Electron owns shell execution, marker parsing, output-file capture, and SQLite writes."
-                />
-                <ArchitectureItem
-                  label="Preload"
-                  description="Renderer only gets a minimal bridge: bootstrap fetch, command execution, terminal IO, path completion, history queries, and clipboard writes."
-                />
-                <ArchitectureItem
-                  label="Renderer"
-                  description="The UI stays card-first for normal commands, then mounts a dedicated `ghostty-web` surface only while interactive sessions are attached."
-                />
-              </div>
-            </Panel>
-
-            <Panel icon={Binary} title="Current Session" kicker="Starship-lite">
-              <div className="space-y-4 font-mono text-xs uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
-                <div className="flex items-center justify-between gap-3 border border-[color:var(--border)] px-3 py-3">
-                  <span className="text-[color:var(--text-secondary)]">cwd</span>
-                  <span className="truncate text-right">{shellContext.displayCwd}</span>
-                </div>
-                <div className="flex items-center justify-between gap-3 border border-[color:var(--border)] px-3 py-3">
-                  <span className="text-[color:var(--text-secondary)]">branch</span>
-                  <span className="truncate text-right">
-                    {shellContext.gitBranch ?? "no repo"}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-3 border border-[color:var(--border)] px-3 py-3">
-                  <span className="text-[color:var(--text-secondary)]">last exit</span>
-                  <span className="text-right">
-                    {latestExecution?.exitCode ?? (hasRunningExecution ? "…" : "n/a")}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-3 border border-[color:var(--border)] px-3 py-3">
-                  <span className="text-[color:var(--text-secondary)]">theme</span>
-                  <span className="text-right">{activeTheme.label}</span>
-                </div>
-              </div>
-            </Panel>
-          </aside>
         </div>
       </div>
 
@@ -1589,6 +1360,16 @@ type ShellEditorProps = {
   onSubmit: () => void;
 };
 
+/** `text-sm` + `leading-7` → 1.25rem × 1.75 line-height = 28px per line; `py-5` → 20px × 2 vertical padding */
+const EDITOR_LINE_HEIGHT_PX = 28;
+const EDITOR_VERTICAL_PAD_PX = 40;
+const EDITOR_MIN_LINES = 2;
+const EDITOR_MAX_LINES = 30;
+const EDITOR_MIN_HEIGHT =
+  EDITOR_MIN_LINES * EDITOR_LINE_HEIGHT_PX + EDITOR_VERTICAL_PAD_PX;
+const EDITOR_MAX_HEIGHT =
+  EDITOR_MAX_LINES * EDITOR_LINE_HEIGHT_PX + EDITOR_VERTICAL_PAD_PX;
+
 const ShellEditor = ({
   value,
   disabled,
@@ -1598,13 +1379,35 @@ const ShellEditor = ({
   ref,
 }: ShellEditorProps & { ref: React.RefObject<HTMLTextAreaElement | null> }) => {
   const highlightRef = useRef<HTMLPreElement | null>(null);
+  const [editorHeight, setEditorHeight] = useState(EDITOR_MIN_HEIGHT);
+
+  useLayoutEffect(() => {
+    const ta = ref.current;
+    if (!ta) {
+      return;
+    }
+
+    ta.style.height = "0px";
+    const natural = ta.scrollHeight;
+    const next = Math.min(
+      EDITOR_MAX_HEIGHT,
+      Math.max(EDITOR_MIN_HEIGHT, natural),
+    );
+    setEditorHeight(next);
+    ta.style.height = "";
+  }, [value, disabled, ref]);
+
+  const scrollEditor = editorHeight >= EDITOR_MAX_HEIGHT;
 
   return (
-    <div className="relative">
+    <div
+      className="relative w-full"
+      style={{ height: editorHeight, minHeight: EDITOR_MIN_HEIGHT }}
+    >
       <pre
         ref={highlightRef}
         aria-hidden="true"
-        className="pointer-events-none min-h-[220px] overflow-hidden whitespace-pre-wrap break-words px-4 py-5 font-mono text-sm leading-7"
+        className="pointer-events-none absolute inset-0 box-border overflow-hidden whitespace-pre-wrap break-words px-4 py-5 font-mono text-sm leading-7"
       >
         {value ? (
           renderHighlightedCommand(value)
@@ -1665,7 +1468,8 @@ const ShellEditor = ({
           }
         }}
         className={cn(
-          "absolute inset-0 min-h-[220px] w-full resize-none overflow-auto bg-transparent px-4 py-5 font-mono text-sm leading-7 outline-none",
+          "mishell-overlay-scroll absolute inset-0 box-border w-full resize-none bg-transparent px-4 py-5 font-mono text-sm leading-7 outline-none",
+          scrollEditor ? "overflow-y-auto" : "overflow-y-hidden",
           "text-transparent caret-[color:var(--accent)] selection:bg-[color:var(--accent-dim)]",
           disabled && "cursor-not-allowed opacity-70",
         )}
@@ -1728,7 +1532,7 @@ function CommandCard({
       : execution.outputPreview || "No output captured.";
 
   return (
-    <article className="border border-[color:var(--border)] bg-[color:var(--panel-muted)] p-4">
+    <article className="w-full min-w-0 py-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="font-mono text-sm text-[color:var(--text-primary)]">
@@ -1739,14 +1543,14 @@ function CommandCard({
             <span>{new Date(execution.startedAt).toLocaleTimeString()}</span>
             <span>exit {execution.exitCode ?? "…"}</span>
             <span>{formatDuration(execution.durationMs)}</span>
-            <span>{isTerminalPresentation ? "terminal mode" : "card output"}</span>
+            {isTerminalPresentation ? <span>terminal mode</span> : null}
           </div>
         </div>
         <StatusPill status={execution.status} />
       </div>
 
       <div className="mt-4 border border-[color:var(--border)] bg-black/20">
-        <pre className="m-0 max-h-48 overflow-auto whitespace-pre-wrap px-4 py-4 font-mono text-sm leading-6 text-[color:var(--text-secondary)]">
+        <pre className="mishell-overlay-scroll m-0 max-h-48 overflow-auto whitespace-pre-wrap px-4 py-4 font-mono text-sm leading-6 text-[color:var(--text-secondary)]">
           {displayOutput}
         </pre>
       </div>
@@ -1784,115 +1588,6 @@ function CommandCard({
         </Button>
       </div>
     </article>
-  );
-}
-
-function AutocompleteRail({
-  items,
-  selectedIndex,
-  visible,
-  onSelect,
-}: {
-  items: HistoryAutocompleteItem[];
-  selectedIndex: number | null;
-  visible: boolean;
-  onSelect: (commandText: string) => void;
-}) {
-  if (!visible) {
-    return (
-      <div className="flex items-center justify-between gap-3 border border-[color:var(--border)] bg-black/20 px-4 py-3 text-[11px] uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
-        <span>Autocomplete idle</span>
-        <span>Tab opens history or path matches when available</span>
-      </div>
-    );
-  }
-
-  return (
-    <div className="border border-[color:var(--border)] bg-black/20">
-      <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-4 py-3 text-[11px] uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
-        <span>{items.length} history matches</span>
-        <span>tab open / accept / arrows move / cmd+ctrl+r search</span>
-      </div>
-      <div className="grid gap-px bg-[color:var(--border)]">
-        {items.map((item, index) => (
-          <button
-            key={`${item.commandText}-${item.lastStartedAt}`}
-            className={cn(
-              "grid gap-2 bg-[color:var(--panel-muted)] px-4 py-3 text-left transition",
-              selectedIndex !== null &&
-                index === selectedIndex &&
-                "bg-[color:color-mix(in_srgb,var(--accent)_8%,var(--panel-muted))]",
-            )}
-            onMouseDown={(event) => {
-              event.preventDefault();
-              onSelect(item.commandText);
-            }}
-          >
-            <div className="flex items-center justify-between gap-3">
-              <span className="font-mono text-sm text-[color:var(--text-primary)]">
-                {item.commandText}
-              </span>
-              <span className="text-[11px] uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
-                {item.cwdMatch ? "cwd match" : formatRelativeTime(item.lastStartedAt)}
-              </span>
-            </div>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[color:var(--text-secondary)]">
-              <span>{item.cwd}</span>
-              <span>used {item.usageCount}x</span>
-              <span>exit {item.lastExitCode ?? "?"}</span>
-            </div>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function PathCompletionRail({
-  items,
-  selectedIndex,
-  onSelect,
-}: {
-  items: PathCompletionItem[];
-  selectedIndex: number | null;
-  onSelect: (item: PathCompletionItem) => void;
-}) {
-  return (
-    <div className="border border-[color:var(--border)] bg-black/20">
-      <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-4 py-3 text-[11px] uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
-        <span>{items.length} path matches</span>
-        <span>tab / arrows move / enter accept / slash + backslash aware</span>
-      </div>
-      <div className="grid gap-px bg-[color:var(--border)]">
-        {items.map((item, index) => (
-          <button
-            key={`${item.path}-${item.label}`}
-            className={cn(
-              "grid gap-2 bg-[color:var(--panel-muted)] px-4 py-3 text-left transition",
-              selectedIndex !== null &&
-                index === selectedIndex &&
-                "bg-[color:color-mix(in_srgb,var(--accent)_8%,var(--panel-muted))]",
-            )}
-            onMouseDown={(event) => {
-              event.preventDefault();
-              onSelect(item);
-            }}
-          >
-            <div className="flex items-center justify-between gap-3">
-              <span className="font-mono text-sm text-[color:var(--text-primary)]">
-                {item.label}
-              </span>
-              <span className="text-[11px] uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
-                {item.isDirectory ? "folder" : "file"}
-              </span>
-            </div>
-            <div className="text-xs text-[color:var(--text-secondary)]">
-              {item.path}
-            </div>
-          </button>
-        ))}
-      </div>
-    </div>
   );
 }
 
@@ -2094,28 +1789,6 @@ function HistorySearchDialog({
   );
 }
 
-function Metric({
-  label,
-  value,
-  icon: Icon,
-}: {
-  label: string;
-  value: string;
-  icon: typeof Command;
-}) {
-  return (
-    <div className="border border-[color:var(--border)] bg-[color:var(--panel-muted)] px-4 py-3">
-      <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.28em] text-[color:var(--text-muted)]">
-        <Icon className="h-3.5 w-3.5 text-[color:var(--accent)]" />
-        {label}
-      </div>
-      <p className="mt-2 truncate font-mono text-sm text-[color:var(--text-primary)]">
-        {value}
-      </p>
-    </div>
-  );
-}
-
 function Panel({
   icon: Icon,
   title,
@@ -2145,69 +1818,6 @@ function Panel({
       </div>
       <div className="p-4">{children}</div>
     </section>
-  );
-}
-
-function SurfaceRow({
-  surface,
-  active,
-}: {
-  surface: ShellSurface;
-  active: boolean;
-}) {
-  return (
-    <div
-      className={cn(
-        "border-b border-[color:var(--border)] px-4 py-3 text-sm",
-        active && "bg-[color:color-mix(in_srgb,var(--accent)_8%,transparent)]",
-      )}
-    >
-      <div className="flex items-center justify-between gap-3">
-        <p className="font-display uppercase tracking-[0.18em] text-[color:var(--text-primary)]">
-          {surface.label}
-        </p>
-        <span
-          className={cn(
-            "border px-2 py-1 text-[10px] uppercase tracking-[0.24em]",
-            surface.status === "active" &&
-              "border-[color:var(--accent)] text-[color:var(--accent)]",
-            surface.status === "ready" &&
-              "border-[color:var(--border-strong)] text-[color:var(--text-secondary)]",
-            surface.status === "standby" &&
-              "border-[color:var(--border)] text-[color:var(--text-muted)]",
-            surface.status === "planned" &&
-              "border-[color:var(--border)] text-[color:var(--text-muted)]",
-          )}
-        >
-          {surface.status}
-        </span>
-      </div>
-      <p className="mt-2 text-xs text-[color:var(--text-secondary)]">
-        {surface.description}
-      </p>
-      {surface.shortcut ? (
-        <p className="mt-2 text-[11px] uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
-          {surface.shortcut}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-function ArchitectureItem({
-  label,
-  description,
-}: {
-  label: string;
-  description: string;
-}) {
-  return (
-    <div className="border border-[color:var(--border)] bg-black/20 px-4 py-3">
-      <div className="text-[11px] uppercase tracking-[0.28em] text-[color:var(--accent)]">
-        {label}
-      </div>
-      <p className="mt-2 leading-6">{description}</p>
-    </div>
   );
 }
 
@@ -2335,24 +1945,6 @@ function formatAbsoluteTimestamp(value: string) {
     hour: "2-digit",
     minute: "2-digit",
   });
-}
-
-function formatRelativeTime(value: string) {
-  const elapsed = Date.now() - Date.parse(value);
-
-  if (elapsed < 60_000) {
-    return "just now";
-  }
-
-  if (elapsed < 3_600_000) {
-    return `${Math.round(elapsed / 60_000)}m ago`;
-  }
-
-  if (elapsed < 86_400_000) {
-    return `${Math.round(elapsed / 3_600_000)}h ago`;
-  }
-
-  return formatAbsoluteTimestamp(value);
 }
 
 function isCursorOnFirstLine(textarea: HTMLTextAreaElement) {
