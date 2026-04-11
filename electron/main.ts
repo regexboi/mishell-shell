@@ -10,6 +10,32 @@ const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 let mainWindow: BrowserWindow | null = null;
 let runtime: ReturnType<typeof createAppRuntime> | null = null;
 
+function delay(ms: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function loadRenderer(window: BrowserWindow) {
+  if (isDevelopment && process.env.VITE_DEV_SERVER_URL) {
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      try {
+        await window.loadURL(process.env.VITE_DEV_SERVER_URL);
+        return;
+      } catch (error) {
+        lastError = error;
+        await delay(250);
+      }
+    }
+
+    throw lastError;
+  }
+
+  await window.loadFile(path.join(__dirname, "..", "dist", "index.html"));
+}
+
 async function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1560,
@@ -29,12 +55,6 @@ async function createMainWindow() {
     },
   });
 
-  if (isDevelopment && process.env.VITE_DEV_SERVER_URL) {
-    await mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
-  } else {
-    await mainWindow.loadFile(path.join(__dirname, "..", "dist", "index.html"));
-  }
-
   mainWindow.webContents.on("preload-error", (_event, preloadPath, error) => {
     console.error(`Preload failed at ${preloadPath}:`, error);
   });
@@ -46,6 +66,12 @@ async function createMainWindow() {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+
+  await loadRenderer(mainWindow);
+
+  if (!mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+    mainWindow.show();
+  }
 }
 
 async function bootstrap() {

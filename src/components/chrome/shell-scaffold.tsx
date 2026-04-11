@@ -502,7 +502,13 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
-      if (historyOpen || activeTerminalExecutionId || !editorRef.current) {
+      if (
+        historyOpen ||
+        activeTerminalExecutionId ||
+        hasRunningExecution ||
+        isSubmitting ||
+        !editorRef.current
+      ) {
         return;
       }
 
@@ -512,7 +518,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [activeTerminalExecutionId, historyOpen]);
+  }, [activeTerminalExecutionId, hasRunningExecution, historyOpen, isSubmitting]);
 
   useEffect(() => {
     if (!copyToast) {
