@@ -17,6 +17,7 @@ import {
   GitBranch,
   Search,
   Settings,
+  Square,
   Timer,
   TriangleAlert,
 } from "lucide-react";
@@ -184,7 +185,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const shouldStickFeedToBottomRef = useRef(true);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [shellContext, setShellContext] = useState<ShellContext>(bootstrap.shell);
-  const [draft, setDraft] = useState("pwd");
+  const [draft, setDraft] = useState("");
   const [executions, setExecutions] = useState<CommandExecution[]>([]);
   const [activeTerminalExecutionId, setActiveTerminalExecutionId] = useState<
     string | null
@@ -227,9 +228,9 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const isBrowserPreview = bootstrap.platform === "browser-preview";
   const isMacTrafficLightInset =
     !isBrowserPreview && bootstrap.platform.startsWith("darwin");
-  const hasRunningExecution = executions.some(
-    (execution) => execution.status === "running",
-  );
+  const runningExecution =
+    executions.find((execution) => execution.status === "running") ?? null;
+  const hasRunningExecution = runningExecution !== null;
   const latestExecution = executions[0] ?? null;
   const feedExecutions = [...executions].reverse();
   const fullOutputExecution = fullOutputExecutionId
@@ -449,6 +450,14 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     });
   });
 
+  const interruptExecution = useEffectEvent(async (executionId: string) => {
+    try {
+      await api.app.interruptExecution({ executionId });
+    } catch {
+      setCopyToast("Interrupt failed");
+    }
+  });
+
   useEffect(() => {
     const unsubscribe = api.app.onExecutionEvent((event) => {
       handleExecutionEvent(event);
@@ -496,6 +505,33 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
       });
     };
   }, [handleHistoryShortcut]);
+
+  const handleInterruptShortcut = useEffectEvent((event: KeyboardEvent) => {
+    const isInterruptShortcut =
+      event.ctrlKey &&
+      !event.shiftKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      event.key.toLowerCase() === "c";
+
+    if (!isInterruptShortcut || activeTerminalExecutionId || !runningExecution) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    void interruptExecution(runningExecution.id);
+  });
+
+  useEffect(() => {
+    window.addEventListener("keydown", handleInterruptShortcut, { capture: true });
+
+    return () => {
+      window.removeEventListener("keydown", handleInterruptShortcut, {
+        capture: true,
+      });
+    };
+  }, [handleInterruptShortcut]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -942,6 +978,11 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         !event.altKey
       ) {
         event.preventDefault();
+        if (runningExecution) {
+          void interruptExecution(runningExecution.id);
+          return true;
+        }
+
         clearEditorDraft();
         return true;
       }
@@ -1259,6 +1300,13 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                             <CommandCard
                               key={execution.id}
                               execution={execution}
+                              onInterrupt={
+                                execution.status === "running"
+                                  ? () => {
+                                      void interruptExecution(execution.id);
+                                    }
+                                  : undefined
+                              }
                               onCopyCommand={() => {
                                 void copyText(execution.commandText, "Command");
                               }}
@@ -1645,12 +1693,14 @@ function ShellHeader({
 
 function CommandCard({
   execution,
+  onInterrupt,
   onCopyCommand,
   onCopyOutput,
   onCopyBoth,
   onOpenFullOutput,
 }: {
   execution: CommandExecution;
+  onInterrupt?: () => void;
   onCopyCommand: () => void;
   onCopyOutput: () => void;
   onCopyBoth: () => void;
@@ -1680,7 +1730,20 @@ function CommandCard({
             {isTerminalPresentation ? <span>terminal mode</span> : null}
           </div>
         </div>
-        <StatusPill status={execution.status} />
+        <div className="flex items-center gap-2">
+          {execution.status === "running" && onInterrupt ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="border-[color:var(--border-strong)] text-[color:var(--accent)] hover:border-[color:var(--accent)] hover:text-[color:var(--accent)]"
+              onClick={onInterrupt}
+            >
+              <Square className="h-3 w-3" fill="currentColor" strokeWidth={1.75} />
+              Stop
+            </Button>
+          ) : null}
+          <StatusPill status={execution.status} />
+        </div>
       </div>
 
       <div className="mt-4 border border-[color:var(--border)] bg-black/20">

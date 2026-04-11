@@ -15,6 +15,7 @@ import type {
   HistoryRecallResponse,
   HistorySearchRequest,
   HistorySearchResponse,
+  InterruptExecutionRequest,
   PathCompletionRequest,
   PathCompletionResponse,
   RunCommandRequest,
@@ -54,6 +55,10 @@ type ActiveTerminalExecution = {
   transcriptStream: fs.WriteStream;
 };
 
+type ActiveCardExecution = {
+  child: IPty;
+};
+
 type CompletionPathApi = Pick<
   typeof path.posix,
   "isAbsolute" | "join" | "parse" | "resolve" | "sep"
@@ -76,6 +81,7 @@ export type ExecutionService = {
     input: RunCommandRequest,
     emitEvent: (event: ExecutionEvent) => void,
   ) => Promise<RunCommandResponse>;
+  interruptExecution: (input: InterruptExecutionRequest) => void;
   writeTerminalInput: (input: TerminalInputRequest) => void;
   resizeTerminal: (input: TerminalResizeRequest) => void;
   dispose: () => void;
@@ -131,6 +137,8 @@ const LEADING_COMMAND_WRAPPERS = new Set([
   "time",
 ]);
 
+const INTERRUPT_INPUT = "\u0003";
+
 export function createExecutionService(
   options: ExecutionServiceOptions,
 ): ExecutionService {
@@ -140,6 +148,7 @@ export function createExecutionService(
     cwd: options.initialCwd,
     executable: options.shellExecutable,
   });
+  const activeCardExecutions = new Map<string, ActiveCardExecution>();
   const activeTerminalExecutions = new Map<string, ActiveTerminalExecution>();
 
   const finalizeExecution = ({
@@ -232,6 +241,7 @@ export function createExecutionService(
       }
 
       finished = true;
+      activeCardExecutions.delete(executionId);
 
       const normalizedOutput = normalizeOutput(result.output);
       const outputPath =
@@ -264,6 +274,8 @@ export function createExecutionService(
           }),
         },
       );
+
+      activeCardExecutions.set(executionId, { child });
 
       child.onData((chunk) => {
         rawOutput += chunk;
@@ -421,6 +433,16 @@ export function createExecutionService(
         ? startTerminalExecution(input, emitEvent)
         : startCardExecution(input, emitEvent);
     },
+    interruptExecution(input) {
+      const activeCardExecution = activeCardExecutions.get(input.executionId);
+
+      if (activeCardExecution) {
+        activeCardExecution.child.write(INTERRUPT_INPUT);
+        return;
+      }
+
+      activeTerminalExecutions.get(input.executionId)?.child.write(INTERRUPT_INPUT);
+    },
     writeTerminalInput(input) {
       activeTerminalExecutions.get(input.executionId)?.child.write(input.data);
     },
@@ -431,6 +453,12 @@ export function createExecutionService(
       );
     },
     dispose() {
+      for (const activeExecution of activeCardExecutions.values()) {
+        activeExecution.child.kill();
+      }
+
+      activeCardExecutions.clear();
+
       for (const activeExecution of activeTerminalExecutions.values()) {
         activeExecution.child.kill();
         activeExecution.transcriptStream.destroy();

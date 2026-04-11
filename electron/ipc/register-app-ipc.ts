@@ -9,6 +9,7 @@ import {
   historyRecallResponseSchema,
   historySearchRequestSchema,
   historySearchResponseSchema,
+  interruptExecutionRequestSchema,
   ipcChannels,
   pathCompletionRequestSchema,
   pathCompletionResponseSchema,
@@ -37,6 +38,12 @@ export function registerAppIpc(runtime: AppRuntime) {
     });
 
     return runCommandResponseSchema.parse(response);
+  });
+
+  ipcMain.handle(ipcChannels.interruptExecution, (_event, input) => {
+    runtime.execution.interruptExecution(
+      interruptExecutionRequestSchema.parse(input),
+    );
   });
 
   ipcMain.handle(ipcChannels.writeTerminalInput, (_event, input) => {

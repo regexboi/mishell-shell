@@ -7,6 +7,7 @@ import {
   historyAutocompleteResponseSchema,
   historyRecallResponseSchema,
   historySearchResponseSchema,
+  interruptExecutionRequestSchema,
   ipcChannels,
   pathCompletionResponseSchema,
   runCommandResponseSchema,
@@ -25,6 +26,12 @@ const api: MishellApi = {
       const response = await ipcRenderer.invoke(ipcChannels.runCommand, input);
 
       return runCommandResponseSchema.parse(response);
+    },
+    async interruptExecution(input) {
+      await ipcRenderer.invoke(
+        ipcChannels.interruptExecution,
+        interruptExecutionRequestSchema.parse(input),
+      );
     },
     async getPathCompletions(input) {
       const response = await ipcRenderer.invoke(

@@ -3,6 +3,7 @@ import { z } from "zod";
 export const ipcChannels = {
   getBootstrap: "app:get-bootstrap",
   runCommand: "app:run-command",
+  interruptExecution: "app:interrupt-execution",
   executionEvent: "app:execution-event",
   writeTerminalInput: "terminal:write-input",
   resizeTerminal: "terminal:resize",
@@ -66,6 +67,10 @@ export const runCommandRequestSchema = z.object({
 export const runCommandResponseSchema = z.object({
   executionId: z.string(),
   mode: commandPresentationSchema,
+});
+
+export const interruptExecutionRequestSchema = z.object({
+  executionId: z.string(),
 });
 
 export const terminalInputRequestSchema = z.object({
@@ -217,6 +222,9 @@ export type HistoryRecallRequest = z.infer<typeof historyRecallRequestSchema>;
 export type HistoryRecallResponse = z.infer<typeof historyRecallResponseSchema>;
 export type HistorySearchRequest = z.infer<typeof historySearchRequestSchema>;
 export type HistorySearchResponse = z.infer<typeof historySearchResponseSchema>;
+export type InterruptExecutionRequest = z.infer<
+  typeof interruptExecutionRequestSchema
+>;
 export type PathCompletionItem = z.infer<typeof pathCompletionItemSchema>;
 export type PathCompletionRequest = z.infer<typeof pathCompletionRequestSchema>;
 export type PathCompletionResponse = z.infer<typeof pathCompletionResponseSchema>;

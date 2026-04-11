@@ -175,6 +175,9 @@ const browserFallback: MishellApi = {
 
       return { executionId, mode: interactive ? "terminal" : "card" };
     },
+    async interruptExecution() {
+      return;
+    },
     async getPathCompletions(input) {
       const trailingWhitespace = /\s$/.test(input.draft);
       const tokenMatch = trailingWhitespace
