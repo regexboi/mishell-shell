@@ -11,11 +11,34 @@ export function TerminalModeSurface({
   onInput,
   onReady,
   onResize,
+  theme,
 }: {
   executionId: string;
   onInput: (data: string) => void;
   onReady: (controller: TerminalModeSurfaceController | null) => void;
   onResize: (size: { cols: number; rows: number }) => void;
+  theme: {
+    background: string;
+    black: string;
+    blue: string;
+    brightBlack: string;
+    brightBlue: string;
+    brightCyan: string;
+    brightGreen: string;
+    brightMagenta: string;
+    brightRed: string;
+    brightWhite: string;
+    brightYellow: string;
+    cursor: string;
+    cyan: string;
+    foreground: string;
+    green: string;
+    magenta: string;
+    red: string;
+    selectionBackground: string;
+    white: string;
+    yellow: string;
+  };
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -40,28 +63,7 @@ export function TerminalModeSurface({
           cursorStyle: "block",
           fontFamily: '"IBM Plex Mono", monospace',
           fontSize: 14,
-          theme: {
-            background: "#05050a",
-            black: "#0d0d12",
-            blue: "#6aa9ff",
-            brightBlack: "#6b6780",
-            brightBlue: "#98c4ff",
-            brightCyan: "#91f3f9",
-            brightGreen: "#b4f2bc",
-            brightMagenta: "#dfadff",
-            brightRed: "#ff9cab",
-            brightWhite: "#ffffff",
-            brightYellow: "#ffe49a",
-            cursor: "#c97bff",
-            cyan: "#5be7ef",
-            foreground: "#f1e7ff",
-            green: "#8ae996",
-            magenta: "#c97bff",
-            red: "#ff7d8f",
-            selectionBackground: "#4e255f",
-            white: "#d8d3e8",
-            yellow: "#ffd166",
-          },
+          theme,
         });
         const fitAddon = new ghostty.FitAddon();
         const resizeDisposable = terminal.onResize(({ cols, rows }) => {
@@ -112,10 +114,10 @@ export function TerminalModeSurface({
       disposed = true;
       cleanup();
     };
-  }, [executionId, onInput, onReady, onResize]);
+  }, [executionId, onInput, onReady, onResize, theme]);
 
   return (
-    <div className="relative h-full min-h-[420px] border border-[color:var(--border-strong)] bg-[#05050a]">
+    <div className="relative h-full min-h-[420px] border border-[color:var(--border-strong)] bg-[color:var(--bg)]">
       <div ref={hostRef} className="h-full w-full overflow-hidden" />
       {loadError ? (
         <div className="absolute inset-0 grid place-items-center px-6 text-center text-sm text-amber-100">

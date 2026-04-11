@@ -4,11 +4,13 @@ import type {
   HistoryAutocompleteItem,
   HistoryEntry,
   HistoryRecallItem,
+  PathCompletionItem,
   RunCommandRequest,
 } from "@shared/contracts";
 
 const previewListeners = new Set<(event: ExecutionEvent) => void>();
 const previewHistory: HistoryEntry[] = [];
+const previewPaths = ["README.md", "package.json", "src/", "electron/", "plan/"];
 
 const browserFallback: MishellApi = {
   app: {
@@ -26,7 +28,7 @@ const browserFallback: MishellApi = {
         },
         database: {
           path: "preview.db",
-          appliedMigrations: ["0001_foundation"],
+          appliedMigrations: ["0001_foundation", "0002_history_search"],
         },
         surfaces: [
           {
@@ -63,7 +65,7 @@ const browserFallback: MishellApi = {
           keyboardFirst: true,
         },
         release: {
-          stage: "phase-04-terminal-mode",
+          stage: "phase-05-v1-polish",
           launchedAt: new Date().toISOString(),
         },
       };
@@ -172,6 +174,32 @@ const browserFallback: MishellApi = {
       }, 180);
 
       return { executionId, mode: interactive ? "terminal" : "card" };
+    },
+    async getPathCompletions(input) {
+      const trailingWhitespace = /\s$/.test(input.draft);
+      const tokenMatch = trailingWhitespace
+        ? null
+        : input.draft.match(/(?:^|\s)([^\s]+)$/);
+      const token = tokenMatch?.[1] ?? "";
+      const prefix = trailingWhitespace
+        ? ""
+        : token.includes("/")
+          ? token.slice(token.lastIndexOf("/") + 1)
+          : token;
+
+      const items: PathCompletionItem[] = previewPaths
+        .filter((candidate) => candidate.startsWith(prefix))
+        .slice(0, input.limit)
+        .map((candidate) => ({
+          nextValue: trailingWhitespace
+            ? `${input.draft}${candidate}`
+            : `${input.draft.slice(0, input.draft.length - prefix.length)}${candidate}`,
+          label: candidate,
+          path: `/workspace/${candidate.replace(/\/$/, "")}`,
+          isDirectory: candidate.endsWith("/"),
+        }));
+
+      return { items };
     },
     async writeTerminalInput() {
       return;

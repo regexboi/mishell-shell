@@ -15,7 +15,13 @@ export type AppRuntime = {
   execution: ExecutionService;
 };
 
-export function createAppRuntime(userDataPath: string): AppRuntime {
+export function createAppRuntime({
+  initialCwd,
+  userDataPath,
+}: {
+  initialCwd: string;
+  userDataPath: string;
+}): AppRuntime {
   const shellExecutable =
     process.env.SHELL ??
     process.env.ComSpec ??
@@ -29,7 +35,7 @@ export function createAppRuntime(userDataPath: string): AppRuntime {
     database,
     execution: createExecutionService({
       database,
-      initialCwd: process.cwd(),
+      initialCwd,
       outputsDirectory: path.join(userDataPath, "command-output"),
       shellExecutable,
     }),
@@ -56,7 +62,7 @@ export function buildBootstrapPayload(runtime: AppRuntime): BootstrapPayload {
         label: "Result Feed",
         status: "ready",
         shortcut: "Tab",
-        description: "Structured command cards replace traditional scrollback.",
+        description: "Structured command cards replace traditional scrollback for normal shell work.",
       },
       {
         id: "history",
@@ -64,7 +70,7 @@ export function buildBootstrapPayload(runtime: AppRuntime): BootstrapPayload {
         status: "ready",
         shortcut: "Cmd/Ctrl+R",
         description:
-          "SQLite-backed recall, autocomplete, and scoped history now power daily command reuse.",
+          "SQLite-backed recall, autocomplete, and scoped history power daily command reuse.",
       },
       {
         id: "terminal",
@@ -72,7 +78,7 @@ export function buildBootstrapPayload(runtime: AppRuntime): BootstrapPayload {
         status: "ready",
         shortcut: "Ctrl+C",
         description:
-          "Full-screen TUIs will use a dedicated compatibility surface instead of the default UI.",
+          "Interactive TUIs use a dedicated compatibility surface instead of the default UI.",
       },
     ],
     focusMode: {
@@ -80,7 +86,7 @@ export function buildBootstrapPayload(runtime: AppRuntime): BootstrapPayload {
       keyboardFirst: true,
     },
     release: {
-      stage: "phase-04-terminal-mode",
+      stage: "phase-05-v1-polish",
       launchedAt: runtime.launchedAt,
     },
   };

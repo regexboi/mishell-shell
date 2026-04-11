@@ -8,6 +8,7 @@ import {
   historyRecallResponseSchema,
   historySearchResponseSchema,
   ipcChannels,
+  pathCompletionResponseSchema,
   runCommandResponseSchema,
   terminalInputRequestSchema,
   terminalResizeRequestSchema,
@@ -24,6 +25,14 @@ const api: MishellApi = {
       const response = await ipcRenderer.invoke(ipcChannels.runCommand, input);
 
       return runCommandResponseSchema.parse(response);
+    },
+    async getPathCompletions(input) {
+      const response = await ipcRenderer.invoke(
+        ipcChannels.getPathCompletions,
+        input,
+      );
+
+      return pathCompletionResponseSchema.parse(response);
     },
     async writeTerminalInput(input) {
       await ipcRenderer.invoke(

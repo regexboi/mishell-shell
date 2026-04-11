@@ -752,11 +752,16 @@ function detectShellFlavor(executable: string): ShellFlavor {
     return "fish";
   }
 
-  if (shellName === "powershell.exe" || shellName === "pwsh.exe") {
+  if (
+    shellName === "powershell" ||
+    shellName === "powershell.exe" ||
+    shellName === "pwsh" ||
+    shellName === "pwsh.exe"
+  ) {
     return "powershell";
   }
 
-  if (shellName === "cmd.exe") {
+  if (shellName === "cmd" || shellName === "cmd.exe") {
     return "cmd";
   }
 

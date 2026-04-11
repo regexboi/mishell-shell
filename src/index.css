@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
-:root {
+:root,
+:root[data-mishell-theme="ultraviolet"] {
   color-scheme: dark;
   --bg: #06060a;
   --panel: rgba(13, 13, 18, 0.86);
@@ -13,6 +14,43 @@
   --text-primary: #f4ebff;
   --text-secondary: rgba(221, 214, 255, 0.78);
   --text-muted: rgba(179, 170, 209, 0.56);
+  --glow-primary: rgba(201, 123, 255, 0.18);
+  --glow-secondary: rgba(80, 20, 120, 0.32);
+  --grid-line: rgba(255, 255, 255, 0.03);
+}
+
+:root[data-mishell-theme="phosphor"] {
+  --bg: #050906;
+  --panel: rgba(11, 20, 16, 0.88);
+  --panel-muted: rgba(8, 16, 12, 0.84);
+  --panel-strong: rgba(12, 24, 18, 0.96);
+  --border: rgba(130, 194, 157, 0.18);
+  --border-strong: rgba(107, 255, 150, 0.38);
+  --accent: #6bff96;
+  --accent-dim: rgba(107, 255, 150, 0.22);
+  --text-primary: #ebfff4;
+  --text-secondary: rgba(215, 248, 227, 0.82);
+  --text-muted: rgba(162, 206, 178, 0.56);
+  --glow-primary: rgba(107, 255, 150, 0.14);
+  --glow-secondary: rgba(19, 92, 56, 0.3);
+  --grid-line: rgba(183, 255, 204, 0.035);
+}
+
+:root[data-mishell-theme="amber"] {
+  --bg: #090603;
+  --panel: rgba(23, 16, 11, 0.88);
+  --panel-muted: rgba(18, 12, 8, 0.84);
+  --panel-strong: rgba(28, 18, 12, 0.96);
+  --border: rgba(255, 188, 120, 0.16);
+  --border-strong: rgba(255, 179, 71, 0.4);
+  --accent: #ffb347;
+  --accent-dim: rgba(255, 179, 71, 0.22);
+  --text-primary: #fff2dd;
+  --text-secondary: rgba(245, 222, 190, 0.8);
+  --text-muted: rgba(198, 165, 125, 0.58);
+  --glow-primary: rgba(255, 179, 71, 0.16);
+  --glow-secondary: rgba(122, 68, 20, 0.3);
+  --grid-line: rgba(255, 210, 140, 0.032);
 }
 
 @theme inline {
@@ -35,7 +73,7 @@
   body {
     margin: 0;
     background:
-      linear-gradient(180deg, rgba(8, 8, 14, 0.98), rgba(4, 4, 8, 1)),
+      linear-gradient(180deg, color-mix(in srgb, var(--bg) 88%, #101018), var(--bg)),
       var(--bg);
     color: var(--text-primary);
     font-family: var(--font-sans);

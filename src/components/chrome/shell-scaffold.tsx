@@ -49,6 +49,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { getMishellApi } from "@/lib/mishell-api";
+import { shouldRequestPathCompletions } from "@/lib/path-completion";
 import { cn } from "@/lib/utils";
 
 import {
@@ -57,6 +58,119 @@ import {
 } from "./terminal-mode-surface";
 
 const exampleCommands = ["pwd", "git status --short", "pnpm check", "ls -la"];
+
+type MishellThemeId = "ultraviolet" | "phosphor" | "amber";
+
+type ThemeOption = {
+  id: MishellThemeId;
+  label: string;
+  terminalTheme: {
+    background: string;
+    black: string;
+    blue: string;
+    brightBlack: string;
+    brightBlue: string;
+    brightCyan: string;
+    brightGreen: string;
+    brightMagenta: string;
+    brightRed: string;
+    brightWhite: string;
+    brightYellow: string;
+    cursor: string;
+    cyan: string;
+    foreground: string;
+    green: string;
+    magenta: string;
+    red: string;
+    selectionBackground: string;
+    white: string;
+    yellow: string;
+  };
+};
+
+const themeStorageKey = "mishell-theme";
+const themeOptions: ThemeOption[] = [
+  {
+    id: "ultraviolet",
+    label: "Ultraviolet",
+    terminalTheme: {
+      background: "#05050a",
+      black: "#0d0d12",
+      blue: "#6aa9ff",
+      brightBlack: "#6b6780",
+      brightBlue: "#98c4ff",
+      brightCyan: "#91f3f9",
+      brightGreen: "#b4f2bc",
+      brightMagenta: "#dfadff",
+      brightRed: "#ff9cab",
+      brightWhite: "#ffffff",
+      brightYellow: "#ffe49a",
+      cursor: "#c97bff",
+      cyan: "#5be7ef",
+      foreground: "#f1e7ff",
+      green: "#8ae996",
+      magenta: "#c97bff",
+      red: "#ff7d8f",
+      selectionBackground: "#4e255f",
+      white: "#d8d3e8",
+      yellow: "#ffd166",
+    },
+  },
+  {
+    id: "phosphor",
+    label: "Phosphor",
+    terminalTheme: {
+      background: "#040807",
+      black: "#0c1411",
+      blue: "#71c7ff",
+      brightBlack: "#5d6a65",
+      brightBlue: "#a6dcff",
+      brightCyan: "#9ef8ef",
+      brightGreen: "#b7ffcc",
+      brightMagenta: "#c2fbb4",
+      brightRed: "#ffab9a",
+      brightWhite: "#effff7",
+      brightYellow: "#ffe28a",
+      cursor: "#6bff96",
+      cyan: "#66e5d8",
+      foreground: "#e5fff2",
+      green: "#6bff96",
+      magenta: "#8de79b",
+      red: "#ff8c7d",
+      selectionBackground: "#1f5137",
+      white: "#d7e8dd",
+      yellow: "#f6d36a",
+    },
+  },
+  {
+    id: "amber",
+    label: "Amber Grid",
+    terminalTheme: {
+      background: "#090603",
+      black: "#18110a",
+      blue: "#7db0ff",
+      brightBlack: "#7f6c58",
+      brightBlue: "#add0ff",
+      brightCyan: "#98f0ff",
+      brightGreen: "#c7f1aa",
+      brightMagenta: "#ffc18a",
+      brightRed: "#ffb18f",
+      brightWhite: "#fff8e9",
+      brightYellow: "#ffe19f",
+      cursor: "#ffb347",
+      cyan: "#78dbe8",
+      foreground: "#fff1dc",
+      green: "#b5df8f",
+      magenta: "#ffb347",
+      red: "#ff8d73",
+      selectionBackground: "#5c3511",
+      white: "#e7d7bf",
+      yellow: "#ffd166",
+    },
+  },
+];
+
+const defaultTheme = themeOptions[0];
 
 type RecallSession = {
   cwd: string;
@@ -100,6 +214,20 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const [fullOutputExecutionId, setFullOutputExecutionId] = useState<string | null>(
     null,
   );
+  const [themeId, setThemeId] = useState<MishellThemeId>(() => {
+    if (typeof window === "undefined") {
+      return defaultTheme.id;
+    }
+
+    try {
+      const storedTheme = window.localStorage.getItem(themeStorageKey);
+      return themeOptions.some((theme) => theme.id === storedTheme)
+        ? (storedTheme as MishellThemeId)
+        : defaultTheme.id;
+    } catch {
+      return defaultTheme.id;
+    }
+  });
   const deferredDraft = useDeferredValue(draft);
   const deferredHistoryQuery = useDeferredValue(historyQuery);
   const isBrowserPreview = bootstrap.platform === "browser-preview";
@@ -130,6 +258,18 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     autocompleteIndex === null ? null : autocompleteItems[autocompleteIndex] ?? null;
   const selectedPathCompletion =
     autocompleteIndex === null ? null : pathCompletionItems[autocompleteIndex] ?? null;
+  const activeTheme =
+    themeOptions.find((theme) => theme.id === themeId) ?? defaultTheme;
+
+  useEffect(() => {
+    document.documentElement.dataset.mishellTheme = themeId;
+
+    try {
+      window.localStorage.setItem(themeStorageKey, themeId);
+    } catch {
+      return;
+    }
+  }, [themeId]);
 
   const focusEditorAtEnd = useEffectEvent(() => {
     requestAnimationFrame(() => {
@@ -836,7 +976,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         !event.altKey
       ) {
         event.preventDefault();
-        const pathPreferred = /\s$/.test(draft) || /\/[^/\s]*$/.test(draft);
+        const pathPreferred = shouldRequestPathCompletions(draft);
 
         if (pathPreferred) {
           if (pathCompletionVisible) {
@@ -959,8 +1099,8 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-[color:var(--bg)] text-[color:var(--text-primary)]">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(201,123,255,0.18),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(80,20,120,0.32),transparent_34%)]" />
-      <div className="pointer-events-none absolute inset-0 opacity-40 [background-image:linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] [background-size:32px_32px]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,var(--glow-primary),transparent_30%),radial-gradient(circle_at_bottom_right,var(--glow-secondary),transparent_34%)]" />
+      <div className="pointer-events-none absolute inset-0 opacity-40 [background-image:linear-gradient(var(--grid-line)_1px,transparent_1px),linear-gradient(90deg,var(--grid-line)_1px,transparent_1px)] [background-size:32px_32px]" />
       <div className="relative mx-auto flex min-h-screen max-w-[1680px] flex-col px-4 py-4 sm:px-6 lg:px-8">
         <header className="border border-[color:var(--border-strong)] bg-[color:var(--panel)] px-4 py-4 shadow-[0_0_0_1px_rgba(195,115,255,0.08),0_24px_72px_rgba(0,0,0,0.34)]">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -968,7 +1108,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
               <div className="flex flex-wrap items-center gap-3 text-[11px] uppercase tracking-[0.34em] text-[color:var(--text-muted)]">
                 <span className="inline-flex items-center gap-2">
                   <span className="h-2 w-2 bg-[color:var(--accent)]" />
-                  Phase 04 Terminal Mode
+                  V1 Release Candidate
                 </span>
                 <span>{bootstrap.platform}</span>
                 {isBrowserPreview ? (
@@ -982,16 +1122,33 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                   {bootstrap.appName}
                 </h1>
                 <p className="max-w-3xl text-sm text-[color:var(--text-secondary)] sm:text-base">
-                  The custom editor and command cards remain the default shell
-                  workflow, with terminal mode reserved for interactive programs
-                  that need a raw compatibility surface.
+                  Keyboard-first shell editing, card-based results, SQLite recall,
+                  and a dedicated raw terminal fallback now land together as the
+                  complete V1 workflow.
                 </p>
                 {isBrowserPreview ? (
                   <p className="max-w-2xl text-xs uppercase tracking-[0.22em] text-[color:var(--accent)]">
-                    Preview fallback active. Launch the Electron window for the
-                    actual `node-pty` plus `ghostty-web` terminal path.
+                    Preview fallback active. Launch Electron for the real
+                    `node-pty`, SQLite, and `ghostty-web` path.
                   </p>
                 ) : null}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[11px] uppercase tracking-[0.28em] text-[color:var(--text-muted)]">
+                  Theme
+                </span>
+                {themeOptions.map((theme) => (
+                  <Button
+                    key={theme.id}
+                    variant={theme.id === activeTheme.id ? "accent" : "ghost"}
+                    size="sm"
+                    onClick={() => {
+                      setThemeId(theme.id);
+                    }}
+                  >
+                    {theme.label}
+                  </Button>
+                ))}
               </div>
             </div>
             <div className="grid gap-3 sm:grid-cols-4">
@@ -1063,13 +1220,14 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                     <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_260px]">
                       <div className="space-y-2 text-sm text-[color:var(--text-secondary)]">
                         <p>
-                          Mishell detected an interactive command and moved the
-                          session into the raw `ghostty-web` surface. Input now
-                          goes directly to the PTY until the process exits.
+                          Mishell detected an interactive command and shifted the
+                          session into the raw compatibility surface. Input now
+                          streams directly to the PTY until the process exits.
                         </p>
                         <p>
-                          `Ctrl+C` is passed through to the active app. When the
-                          program returns, focus drops back to the custom editor.
+                          `Ctrl+C` is passed through to the active program. When it
+                          returns, focus drops back to the custom editor and the
+                          history/card pipeline stays intact.
                         </p>
                       </div>
                       <div className="grid gap-2 text-xs uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
@@ -1096,6 +1254,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                       onInput={handleTerminalInput}
                       onReady={handleTerminalReady}
                       onResize={handleTerminalResize}
+                      theme={activeTheme.terminalTheme}
                     />
                   </div>
                 </Panel>
@@ -1182,7 +1341,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                 <Panel
                   icon={TerminalSquare}
                   title="Terminal Compatibility"
-                  kicker="Phase 4 fallback"
+                  kicker="Fallback surface"
                 >
                   <div className="flex h-full flex-col justify-between gap-6">
                     <div className="space-y-3 text-sm text-[color:var(--text-secondary)]">
@@ -1192,13 +1351,13 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                         such as `vim`, `lazygit`, `codex`, `ssh`, or a shell REPL.
                       </p>
                       <p>
-                        Detection is heuristic by command prefix in V1, which keeps
-                        mode switches intentional instead of letting normal commands
-                        drift into a raw terminal.
+                        Detection stays heuristic by command prefix in V1. That
+                        keeps normal shell work card-first instead of letting
+                        routine commands drift into raw terminal mode.
                       </p>
                     </div>
                     <div className="border border-[color:var(--border)] bg-black/30 p-4 font-mono text-xs uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
-                      standby / compatibility layer / only for interactive flows
+                      standby / compatibility layer / interactive flows only
                     </div>
                   </div>
                 </Panel>
@@ -1213,9 +1372,9 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
               >
                 {executions.length === 0 ? (
                   <div className="border border-dashed border-[color:var(--border)] bg-[color:var(--panel-muted)] px-5 py-6 text-sm text-[color:var(--text-secondary)]">
-                    Run a command above to create the first card. Try `pwd`,
-                    `git status --short`, and a failing command like `false` or
-                    `missing-command` to verify success and error flows.
+                    Run a command to create the first card. Good smoke checks are
+                    `pwd`, `git status --short`, a failing command like `false`,
+                    and `vim README.md` to confirm terminal-mode fallback.
                   </div>
                 ) : (
                   <div className="grid gap-3">
@@ -1282,10 +1441,10 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
               >
                 <div className="space-y-4 text-sm text-[color:var(--text-secondary)]">
                   <p>
-                    History recall now runs off the persisted SQLite command store.
-                    `Tab` opens autocomplete, `ArrowUp` exits completions before
-                    walking current-directory history, `Ctrl+C` clears the draft,
-                    and `Cmd/Ctrl+R` opens the global search surface.
+                    Recall now runs on the persisted SQLite history store. `Tab`
+                    prefers history matches first, then filesystem completions for
+                    POSIX or Windows-style paths, while `Cmd/Ctrl+R` opens global
+                    search and `ArrowUp` walks cwd-scoped recall.
                   </p>
                   <div className="grid gap-2 text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">
                     <div className="flex items-center justify-between border border-[color:var(--border)] px-3 py-2">
@@ -1315,7 +1474,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                 />
                 <ArchitectureItem
                   label="Preload"
-                  description="Renderer only gets a minimal bridge: bootstrap fetch, run-command invoke, execution events, and clipboard writes."
+                  description="Renderer only gets a minimal bridge: bootstrap fetch, command execution, terminal IO, path completion, history queries, and clipboard writes."
                 />
                 <ArchitectureItem
                   label="Renderer"
@@ -1341,6 +1500,10 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                   <span className="text-right">
                     {latestExecution?.exitCode ?? (hasRunningExecution ? "…" : "n/a")}
                   </span>
+                </div>
+                <div className="flex items-center justify-between gap-3 border border-[color:var(--border)] px-3 py-3">
+                  <span className="text-[color:var(--text-secondary)]">theme</span>
+                  <span className="text-right">{activeTheme.label}</span>
                 </div>
               </div>
             </Panel>
@@ -1441,7 +1604,9 @@ const ShellEditor = ({
           renderHighlightedCommand(value)
         ) : (
           <span className="text-[color:var(--text-muted)]">
-            Type a shell command. `Enter` runs it. `Tab` opens completions. `Ctrl+C` clears the draft. `Shift+Enter` inserts a new line.
+            Type a shell command. `Enter` runs it. `Tab` opens history or path
+            completions. `Ctrl+C` clears the draft. `Shift+Enter` inserts a new
+            line.
           </span>
         )}
       </pre>
@@ -1631,7 +1796,7 @@ function AutocompleteRail({
     return (
       <div className="flex items-center justify-between gap-3 border border-[color:var(--border)] bg-black/20 px-4 py-3 text-[11px] uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
         <span>Autocomplete idle</span>
-        <span>Tab opens when a history match exists</span>
+        <span>Tab opens history or path matches when available</span>
       </div>
     );
   }
@@ -1690,7 +1855,7 @@ function PathCompletionRail({
     <div className="border border-[color:var(--border)] bg-black/20">
       <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-4 py-3 text-[11px] uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
         <span>{items.length} path matches</span>
-        <span>tab / arrows move / enter accept</span>
+        <span>tab / arrows move / enter accept / slash + backslash aware</span>
       </div>
       <div className="grid gap-px bg-[color:var(--border)]">
         {items.map((item, index) => (

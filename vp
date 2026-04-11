@@ -14,7 +14,7 @@ case "$command" in
     exec pnpm install "$@"
     ;;
   dev|check|test|build|pack)
-    exec pnpm "$command" "$@"
+    exec pnpm run "$command" "$@"
     ;;
   run)
     exec pnpm "$@"

@@ -16,6 +16,8 @@ async function createMainWindow() {
     height: 980,
     minWidth: 1180,
     minHeight: 760,
+    show: false,
+    autoHideMenuBar: process.platform !== "darwin",
     backgroundColor: "#05050a",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     webPreferences: {
@@ -23,6 +25,7 @@ async function createMainWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      spellcheck: false,
     },
   });
 
@@ -36,6 +39,10 @@ async function createMainWindow() {
     console.error(`Preload failed at ${preloadPath}:`, error);
   });
 
+  mainWindow.once("ready-to-show", () => {
+    mainWindow?.show();
+  });
+
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -44,7 +51,10 @@ async function createMainWindow() {
 async function bootstrap() {
   nativeTheme.themeSource = "dark";
 
-  runtime = createAppRuntime(app.getPath("userData"));
+  runtime = createAppRuntime({
+    initialCwd: app.isPackaged ? app.getPath("home") : process.cwd(),
+    userDataPath: app.getPath("userData"),
+  });
   registerAppIpc(runtime);
 
   await createMainWindow();

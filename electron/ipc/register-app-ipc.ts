@@ -10,6 +10,8 @@ import {
   historySearchRequestSchema,
   historySearchResponseSchema,
   ipcChannels,
+  pathCompletionRequestSchema,
+  pathCompletionResponseSchema,
   runCommandRequestSchema,
   runCommandResponseSchema,
   terminalInputRequestSchema,
@@ -39,6 +41,12 @@ export function registerAppIpc(runtime: AppRuntime) {
 
   ipcMain.handle(ipcChannels.writeTerminalInput, (_event, input) => {
     runtime.execution.writeTerminalInput(terminalInputRequestSchema.parse(input));
+  });
+
+  ipcMain.handle(ipcChannels.getPathCompletions, (_event, input) => {
+    return pathCompletionResponseSchema.parse(
+      runtime.execution.getPathCompletions(pathCompletionRequestSchema.parse(input)),
+    );
   });
 
   ipcMain.handle(ipcChannels.resizeTerminal, (_event, input) => {

@@ -10,12 +10,12 @@
     "postinstall": "pnpm rebuild:native",
     "predev": "pnpm rebuild:native",
     "pretest": "pnpm rebuild:node",
-    "rebuild:native": "electron-builder install-app-deps",
+    "rebuild:native": "node electron/rebuild-native.cjs",
     "rebuild:node": "pnpm rebuild better-sqlite3 node-pty",
     "dev": "concurrently -k \"pnpm dev:renderer\" \"pnpm dev:electron\" \"pnpm dev:app\"",
     "dev:renderer": "vite --host 127.0.0.1 --port 5173 --strictPort",
     "dev:electron": "tsup --watch",
-    "dev:app": "wait-on tcp:5173 file:dist-electron/main.cjs && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electronmon dist-electron/main.cjs",
+    "dev:app": "wait-on tcp:5173 file:dist-electron/main.cjs && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 node electron/dev-electronmon.cjs",
     "check": "pnpm check:types && pnpm check:lint",
     "check:types": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "check:lint": "oxlint .",
@@ -23,19 +23,59 @@
     "build": "pnpm build:renderer && pnpm build:electron",
     "build:renderer": "vite build",
     "build:electron": "tsup",
-    "pack": "pnpm rebuild:native && pnpm build && electron-builder --dir",
+    "pack": "pnpm rebuild:native && pnpm build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --publish never",
+    "pack:dir": "pnpm rebuild:native && pnpm build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir",
     "run": "pnpm"
   },
   "build": {
     "appId": "dev.mishell.shell",
+    "productName": "Mishell",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "asar": true,
+    "npmRebuild": false,
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
       "node_modules/**/*",
       "package.json"
     ],
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**/*",
+      "node_modules/node-pty/**/*"
+    ],
     "directories": {
-      "buildResources": "assets"
+      "buildResources": "assets",
+      "output": "release"
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "allowToChangeInstallationDirectory": true,
+      "oneClick": false,
+      "perMachine": false
     }
   },
   "pnpm": {
@@ -48,6 +88,7 @@
     ]
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.0.3",
     "@tailwindcss/vite": "^4.2.2",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.5.2",
@@ -56,6 +97,7 @@
     "@vitejs/plugin-react": "^5.2.0",
     "concurrently": "^9.2.1",
     "cross-env": "^10.1.0",
+    "electron": "^41.1.1",
     "electron-builder": "^26.8.1",
     "electronmon": "^2.0.4",
     "oxlint": "^1.58.0",
@@ -77,7 +119,6 @@
     "better-sqlite3": "^12.8.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "electron": "^41.1.1",
     "ghostty-web": "^0.4.0",
     "lucide-react": "^1.7.0",
     "node-pty": "^1.1.0",

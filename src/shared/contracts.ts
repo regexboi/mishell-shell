@@ -6,6 +6,7 @@ export const ipcChannels = {
   executionEvent: "app:execution-event",
   writeTerminalInput: "terminal:write-input",
   resizeTerminal: "terminal:resize",
+  getPathCompletions: "shell:get-path-completions",
   writeClipboard: "app:write-clipboard",
   getHistoryAutocomplete: "history:get-autocomplete",
   searchHistory: "history:search",
@@ -17,6 +18,7 @@ export const releaseStageSchema = z.enum([
   "phase-02-execution-ui",
   "phase-03-history-search",
   "phase-04-terminal-mode",
+  "phase-05-v1-polish",
 ]);
 
 export const commandPresentationSchema = z.enum(["card", "terminal"]);
@@ -98,6 +100,12 @@ export const historyRecallRequestSchema = z.object({
   limit: z.number().int().positive().max(120).default(60),
 });
 
+export const pathCompletionRequestSchema = z.object({
+  draft: z.string(),
+  cwd: z.string(),
+  limit: z.number().int().positive().max(60).default(24),
+});
+
 export const commandExecutionSchema = z.object({
   id: z.string(),
   presentation: commandPresentationSchema,
@@ -146,6 +154,13 @@ export const historyRecallItemSchema = z.object({
   exitCode: z.number().int().nullable(),
 });
 
+export const pathCompletionItemSchema = z.object({
+  nextValue: z.string(),
+  label: z.string(),
+  path: z.string(),
+  isDirectory: z.boolean(),
+});
+
 export const historyAutocompleteResponseSchema = z.object({
   items: z.array(historyAutocompleteItemSchema),
 });
@@ -156,6 +171,10 @@ export const historySearchResponseSchema = z.object({
 
 export const historyRecallResponseSchema = z.object({
   items: z.array(historyRecallItemSchema),
+});
+
+export const pathCompletionResponseSchema = z.object({
+  items: z.array(pathCompletionItemSchema),
 });
 
 export const executionStartedEventSchema = z.object({
@@ -198,6 +217,9 @@ export type HistoryRecallRequest = z.infer<typeof historyRecallRequestSchema>;
 export type HistoryRecallResponse = z.infer<typeof historyRecallResponseSchema>;
 export type HistorySearchRequest = z.infer<typeof historySearchRequestSchema>;
 export type HistorySearchResponse = z.infer<typeof historySearchResponseSchema>;
+export type PathCompletionItem = z.infer<typeof pathCompletionItemSchema>;
+export type PathCompletionRequest = z.infer<typeof pathCompletionRequestSchema>;
+export type PathCompletionResponse = z.infer<typeof pathCompletionResponseSchema>;
 export type RunCommandRequest = z.infer<typeof runCommandRequestSchema>;
 export type RunCommandResponse = z.infer<typeof runCommandResponseSchema>;
 export type ShellContext = z.infer<typeof shellContextSchema>;

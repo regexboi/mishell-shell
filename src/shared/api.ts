@@ -7,6 +7,8 @@ import type {
   HistoryRecallResponse,
   HistorySearchRequest,
   HistorySearchResponse,
+  PathCompletionRequest,
+  PathCompletionResponse,
   RunCommandRequest,
   RunCommandResponse,
   TerminalInputRequest,
@@ -17,6 +19,9 @@ export interface MishellApi {
   app: {
     getBootstrap: () => Promise<BootstrapPayload>;
     runCommand: (input: RunCommandRequest) => Promise<RunCommandResponse>;
+    getPathCompletions: (
+      input: PathCompletionRequest,
+    ) => Promise<PathCompletionResponse>;
     writeTerminalInput: (input: TerminalInputRequest) => Promise<void>;
     resizeTerminal: (input: TerminalResizeRequest) => Promise<void>;
     onExecutionEvent: (listener: (event: ExecutionEvent) => void) => () => void;
