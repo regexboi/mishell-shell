@@ -664,6 +664,15 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     return response.items.length > 0;
   });
 
+  const clearEditorDraft = useEffectEvent(() => {
+    recallSessionRef.current = null;
+    setAutocompleteItems([]);
+    setPathCompletionItems([]);
+    setAutocompleteIndex(null);
+    setDraftValue("", "system");
+    focusEditorAtEnd();
+  });
+
   const acceptAutocomplete = useEffectEvent(() => {
     if (!selectedAutocomplete) {
       return false;
@@ -753,6 +762,18 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
 
   const handleEditorKeyDown = useEffectEvent(
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (
+        event.key.toLowerCase() === "c" &&
+        event.ctrlKey &&
+        !event.shiftKey &&
+        !event.metaKey &&
+        !event.altKey
+      ) {
+        event.preventDefault();
+        clearEditorDraft();
+        return true;
+      }
+
       if (
         event.key === "Enter" &&
         !event.shiftKey &&
@@ -1105,6 +1126,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                       <span>Free cursor placement</span>
                       <span>Autocomplete from SQLite</span>
                       <span>Up arrow = cwd recall</span>
+                      <span>Ctrl+C clears draft</span>
                       <span>Shift+Enter for newline</span>
                     </div>
                     <div className="border border-[color:var(--border-strong)] bg-[linear-gradient(180deg,rgba(18,18,25,0.82),rgba(10,10,16,0.96))]">
@@ -1262,8 +1284,8 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                   <p>
                     History recall now runs off the persisted SQLite command store.
                     `Tab` opens autocomplete, `ArrowUp` exits completions before
-                    walking current-directory history, and `Cmd/Ctrl+R` opens the
-                    global search surface.
+                    walking current-directory history, `Ctrl+C` clears the draft,
+                    and `Cmd/Ctrl+R` opens the global search surface.
                   </p>
                   <div className="grid gap-2 text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">
                     <div className="flex items-center justify-between border border-[color:var(--border)] px-3 py-2">
@@ -1419,7 +1441,7 @@ const ShellEditor = ({
           renderHighlightedCommand(value)
         ) : (
           <span className="text-[color:var(--text-muted)]">
-            Type a shell command. `Enter` runs it. `Tab` opens completions. `Shift+Enter` inserts a new line.
+            Type a shell command. `Enter` runs it. `Tab` opens completions. `Ctrl+C` clears the draft. `Shift+Enter` inserts a new line.
           </span>
         )}
       </pre>
