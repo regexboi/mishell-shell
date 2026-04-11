@@ -570,13 +570,11 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         return direction === "next" ? 0 : autocompleteItems.length - 1;
       }
 
-      const nextIndex =
-        direction === "next"
-          ? current + 1
-          : current <= 0
-            ? autocompleteItems.length - 1
-            : current - 1;
+      if (direction === "prev") {
+        return current <= 0 ? null : current - 1;
+      }
 
+      const nextIndex = current + 1;
       return clampIndex(nextIndex, autocompleteItems.length);
     });
 
@@ -598,13 +596,11 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
           return direction === "next" ? 0 : pathCompletionItems.length - 1;
         }
 
-        const nextIndex =
-          direction === "next"
-            ? current + 1
-            : current <= 0
-              ? pathCompletionItems.length - 1
-              : current - 1;
+        if (direction === "prev") {
+          return current <= 0 ? null : current - 1;
+        }
 
+        const nextIndex = current + 1;
         return clampIndex(nextIndex, pathCompletionItems.length);
       });
 
@@ -862,6 +858,34 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
 
           void requestPathCompletions();
         });
+        return true;
+      }
+
+      if (
+        event.key === "ArrowUp" &&
+        !event.shiftKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        pathCompletionVisible &&
+        autocompleteIndex !== null
+      ) {
+        event.preventDefault();
+        navigatePathCompletions("prev");
+        return true;
+      }
+
+      if (
+        event.key === "ArrowUp" &&
+        !event.shiftKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        historyAutocompleteVisible &&
+        autocompleteIndex !== null
+      ) {
+        event.preventDefault();
+        navigateAutocomplete("prev");
         return true;
       }
 
@@ -1237,8 +1261,9 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                 <div className="space-y-4 text-sm text-[color:var(--text-secondary)]">
                   <p>
                     History recall now runs off the persisted SQLite command store.
-                    `Tab` accepts autocomplete, `ArrowUp` walks current-directory
-                    history, and `Cmd/Ctrl+R` opens the global search surface.
+                    `Tab` opens autocomplete, `ArrowUp` exits completions before
+                    walking current-directory history, and `Cmd/Ctrl+R` opens the
+                    global search surface.
                   </p>
                   <div className="grid gap-2 text-xs uppercase tracking-[0.28em] text-[color:var(--text-muted)]">
                     <div className="flex items-center justify-between border border-[color:var(--border)] px-3 py-2">
@@ -1593,7 +1618,7 @@ function AutocompleteRail({
     <div className="border border-[color:var(--border)] bg-black/20">
       <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-4 py-3 text-[11px] uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
         <span>{items.length} history matches</span>
-        <span>tab open / accept / arrow down cycle / cmd+ctrl+r search</span>
+        <span>tab open / accept / arrows move / cmd+ctrl+r search</span>
       </div>
       <div className="grid gap-px bg-[color:var(--border)]">
         {items.map((item, index) => (
@@ -1643,7 +1668,7 @@ function PathCompletionRail({
     <div className="border border-[color:var(--border)] bg-black/20">
       <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-4 py-3 text-[11px] uppercase tracking-[0.24em] text-[color:var(--text-muted)]">
         <span>{items.length} path matches</span>
-        <span>tab / arrow down cycle / enter accept</span>
+        <span>tab / arrows move / enter accept</span>
       </div>
       <div className="grid gap-px bg-[color:var(--border)]">
         {items.map((item, index) => (
