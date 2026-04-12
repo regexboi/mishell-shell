@@ -103,6 +103,20 @@ describe("interceptTerminalHostQueries", () => {
     });
   });
 
+  it("forwards content surrounding an intercepted query", () => {
+    expect(
+      interceptTerminalHostQueries({
+        chunk: "before\u001b[6nafter",
+        pendingBuffer: "",
+        profile: "codex",
+      }),
+    ).toEqual({
+      forwardChunk: "beforeafter",
+      nextPendingBuffer: "",
+      responses: ["\u001b[1;1R"],
+    });
+  });
+
   it("passes through terminal output for non-codex sessions", () => {
     expect(
       interceptTerminalHostQueries({

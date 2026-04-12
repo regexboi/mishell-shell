@@ -435,13 +435,8 @@ export function createExecutionService(
       child.onExit(({ exitCode }) => {
         const activeExecution = activeTerminalExecutions.get(executionId);
 
-        if (activeExecution?.hostQueryBuffer) {
-          emitEvent({
-            type: "output",
-            executionId,
-            chunk: activeExecution.hostQueryBuffer,
-            target: "terminal",
-          });
+        if (activeExecution) {
+          activeExecution.hostQueryBuffer = "";
         }
 
         finishTerminalExecution({
@@ -945,6 +940,12 @@ export function interceptTerminalHostQueries({
   const responses: string[] = [];
 
   while (cursor < combined.length) {
+    if (combined[cursor] !== "\u001b") {
+      forwardChunk += combined[cursor];
+      cursor += 1;
+      continue;
+    }
+
     const matchedQuery = CODEX_TERMINAL_QUERY_REPLIES.find(({ query }) =>
       combined.startsWith(query, cursor)
     );
