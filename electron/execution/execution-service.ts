@@ -7,6 +7,8 @@ import path from "node:path";
 import { spawn, type IPty } from "node-pty";
 
 import type {
+  CommandCompletionRequest,
+  CommandCompletionResponse,
   CommandExecution,
   ExecutionEvent,
   HistoryAutocompleteRequest,
@@ -28,6 +30,7 @@ import {
   getPrimaryCommand,
   shouldUseTerminalMode as shouldCommandUseTerminalMode,
 } from "@shared/terminal-mode";
+import { resolveCommandCompletions } from "../completion/command-completions";
 
 import type { DatabaseContext } from "../db/database";
 import {
@@ -90,6 +93,9 @@ type CompletionContextOptions = {
 
 export type ExecutionService = {
   getShellContext: () => ShellContext;
+  getCommandCompletions: (
+    input: CommandCompletionRequest,
+  ) => Promise<CommandCompletionResponse>;
   getHistoryAutocomplete: (
     input: HistoryAutocompleteRequest,
   ) => HistoryAutocompleteResponse;
@@ -570,6 +576,9 @@ export function createExecutionService(
   return {
     getShellContext() {
       return shellContext;
+    },
+    getCommandCompletions(input) {
+      return resolveCommandCompletions(input);
     },
     getHistoryAutocomplete(input) {
       return queryHistoryAutocomplete(options.database.db, input);

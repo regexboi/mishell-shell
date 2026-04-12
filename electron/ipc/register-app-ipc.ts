@@ -2,6 +2,8 @@ import { clipboard, ipcMain } from "electron";
 
 import {
   bootstrapPayloadSchema,
+  commandCompletionRequestSchema,
+  commandCompletionResponseSchema,
   executionEventSchema,
   historyAutocompleteRequestSchema,
   historyAutocompleteResponseSchema,
@@ -48,6 +50,14 @@ export function registerAppIpc(runtime: AppRuntime) {
 
   ipcMain.handle(ipcChannels.writeTerminalInput, (_event, input) => {
     runtime.execution.writeTerminalInput(terminalInputRequestSchema.parse(input));
+  });
+
+  ipcMain.handle(ipcChannels.getCommandCompletions, async (_event, input) => {
+    return commandCompletionResponseSchema.parse(
+      await runtime.execution.getCommandCompletions(
+        commandCompletionRequestSchema.parse(input),
+      ),
+    );
   });
 
   ipcMain.handle(ipcChannels.getPathCompletions, (_event, input) => {

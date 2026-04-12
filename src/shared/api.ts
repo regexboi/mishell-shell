@@ -1,5 +1,7 @@
 import type {
   BootstrapPayload,
+  CommandCompletionRequest,
+  CommandCompletionResponse,
   ExecutionEvent,
   HistoryAutocompleteRequest,
   HistoryAutocompleteResponse,
@@ -21,6 +23,9 @@ export interface MishellApi {
     getBootstrap: () => Promise<BootstrapPayload>;
     runCommand: (input: RunCommandRequest) => Promise<RunCommandResponse>;
     interruptExecution: (input: InterruptExecutionRequest) => Promise<void>;
+    getCommandCompletions: (
+      input: CommandCompletionRequest,
+    ) => Promise<CommandCompletionResponse>;
     getPathCompletions: (
       input: PathCompletionRequest,
     ) => Promise<PathCompletionResponse>;

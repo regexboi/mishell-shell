@@ -7,6 +7,7 @@ export const ipcChannels = {
   executionEvent: "app:execution-event",
   writeTerminalInput: "terminal:write-input",
   resizeTerminal: "terminal:resize",
+  getCommandCompletions: "shell:get-command-completions",
   getPathCompletions: "shell:get-path-completions",
   writeClipboard: "app:write-clipboard",
   getHistoryAutocomplete: "history:get-autocomplete",
@@ -111,6 +112,26 @@ export const pathCompletionRequestSchema = z.object({
   limit: z.number().int().positive().max(60).default(24),
 });
 
+export const commandCompletionKindSchema = z.enum([
+  "command",
+  "subcommand",
+  "option",
+  "value",
+]);
+
+export const commandCompletionSourceSchema = z.enum([
+  "fig-local",
+  "fig-public",
+  "preview",
+]);
+
+export const commandCompletionRequestSchema = z.object({
+  draft: z.string(),
+  cwd: z.string(),
+  offset: z.number().int().nonnegative().max(10_000).default(0),
+  limit: z.number().int().positive().max(60).default(24),
+});
+
 export const commandExecutionSchema = z.object({
   id: z.string(),
   presentation: commandPresentationSchema,
@@ -166,6 +187,15 @@ export const pathCompletionItemSchema = z.object({
   isDirectory: z.boolean(),
 });
 
+export const commandCompletionItemSchema = z.object({
+  nextValue: z.string(),
+  label: z.string(),
+  description: z.string().nullable(),
+  detail: z.string().nullable(),
+  kind: commandCompletionKindSchema,
+  source: commandCompletionSourceSchema,
+});
+
 export const historyAutocompleteResponseSchema = z.object({
   items: z.array(historyAutocompleteItemSchema),
 });
@@ -176,6 +206,13 @@ export const historySearchResponseSchema = z.object({
 
 export const historyRecallResponseSchema = z.object({
   items: z.array(historyRecallItemSchema),
+});
+
+export const commandCompletionResponseSchema = z.object({
+  items: z.array(commandCompletionItemSchema),
+  hasMore: z.boolean(),
+  resolvedCommand: z.boolean().default(false),
+  yieldToPath: z.boolean().default(false),
 });
 
 export const pathCompletionResponseSchema = z.object({
@@ -214,6 +251,13 @@ export const executionEventSchema = z.discriminatedUnion("type", [
 ]);
 
 export type BootstrapPayload = z.infer<typeof bootstrapPayloadSchema>;
+export type CommandCompletionItem = z.infer<typeof commandCompletionItemSchema>;
+export type CommandCompletionRequest = z.infer<
+  typeof commandCompletionRequestSchema
+>;
+export type CommandCompletionResponse = z.infer<
+  typeof commandCompletionResponseSchema
+>;
 export type CommandExecution = z.infer<typeof commandExecutionSchema>;
 export type ExecutionEvent = z.infer<typeof executionEventSchema>;
 export type HistoryAutocompleteItem = z.infer<typeof historyAutocompleteItemSchema>;

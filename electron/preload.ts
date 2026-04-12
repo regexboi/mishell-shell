@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { MishellApi } from "@shared/api";
 import {
   bootstrapPayloadSchema,
+  commandCompletionResponseSchema,
   executionEventSchema,
   historyAutocompleteResponseSchema,
   historyRecallResponseSchema,
@@ -32,6 +33,14 @@ const api: MishellApi = {
         ipcChannels.interruptExecution,
         interruptExecutionRequestSchema.parse(input),
       );
+    },
+    async getCommandCompletions(input) {
+      const response = await ipcRenderer.invoke(
+        ipcChannels.getCommandCompletions,
+        input,
+      );
+
+      return commandCompletionResponseSchema.parse(response);
     },
     async getPathCompletions(input) {
       const response = await ipcRenderer.invoke(

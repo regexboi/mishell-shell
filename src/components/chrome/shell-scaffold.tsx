@@ -24,6 +24,7 @@ import {
 
 import type {
   BootstrapPayload,
+  CommandCompletionItem,
   CommandExecution,
   ExecutionEvent,
   HistoryAutocompleteItem,
@@ -82,6 +83,7 @@ type ThemeOption = {
 };
 
 const themeStorageKey = "mishell-theme";
+const COMMAND_COMPLETION_PAGE_SIZE = 24;
 const themeOptions: ThemeOption[] = [
   {
     id: "ultraviolet",
@@ -177,6 +179,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const historySearchInputRef = useRef<HTMLInputElement | null>(null);
   const feedScrollRef = useRef<HTMLDivElement | null>(null);
+  const commandCompletionRequestRef = useRef(0);
   const autocompleteRequestRef = useRef(0);
   const pathCompletionRequestRef = useRef(0);
   const historySearchRequestRef = useRef(0);
@@ -193,6 +196,12 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   >(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [copyToast, setCopyToast] = useState<string | null>(null);
+  const [commandCompletionItems, setCommandCompletionItems] = useState<
+    CommandCompletionItem[]
+  >([]);
+  const [commandCompletionHasMore, setCommandCompletionHasMore] = useState(false);
+  const [commandCompletionLoadingMore, setCommandCompletionLoadingMore] =
+    useState(false);
   const [autocompleteItems, setAutocompleteItems] = useState<
     HistoryAutocompleteItem[]
   >([]);
@@ -238,10 +247,20 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     ? executions.find((execution) => execution.id === fullOutputExecutionId) ?? null
     : null;
   const recallVisible = recallSession !== null && recallSession.items.length > 0;
+  const commandCompletionVisible =
+    commandCompletionItems.length > 0 && recallSession === null;
   const historyAutocompleteVisible =
-    autocompleteItems.length > 0 && recallSession === null;
+    autocompleteItems.length > 0 &&
+    recallSession === null &&
+    !commandCompletionVisible;
   const pathCompletionVisible =
-    pathCompletionItems.length > 0 && recallSession === null;
+    pathCompletionItems.length > 0 &&
+    recallSession === null &&
+    !commandCompletionVisible;
+  const selectedCommandCompletion =
+    autocompleteIndex === null
+      ? null
+      : commandCompletionItems[autocompleteIndex] ?? null;
   const selectedAutocomplete =
     autocompleteIndex === null ? null : autocompleteItems[autocompleteIndex] ?? null;
   const selectedPathCompletion =
@@ -273,10 +292,17 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     });
   });
 
+  const clearCommandCompletionState = useEffectEvent(() => {
+    setCommandCompletionItems([]);
+    setCommandCompletionHasMore(false);
+    setCommandCompletionLoadingMore(false);
+  });
+
   const setDraftValue = useEffectEvent(
     (nextValue: string, source: "history" | "system" | "user" = "user") => {
       if (source === "user") {
         setRecallSession(null);
+        clearCommandCompletionState();
         setPathCompletionItems([]);
         setAutocompleteIndex(null);
       }
@@ -307,8 +333,21 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     focusEditorAtEnd();
   });
 
+  const applyCommandCompletionSelection = useEffectEvent(
+    (item: CommandCompletionItem) => {
+      setRecallSession(null);
+      clearCommandCompletionState();
+      setPathCompletionItems([]);
+      setAutocompleteItems([]);
+      setAutocompleteIndex(null);
+      setDraftValue(item.nextValue, "system");
+      focusEditorAtEnd();
+    },
+  );
+
   const applyPathCompletionSelection = useEffectEvent((item: PathCompletionItem) => {
     setRecallSession(null);
+    clearCommandCompletionState();
     setPathCompletionItems([]);
     setAutocompleteItems([]);
     setAutocompleteIndex(null);
@@ -320,6 +359,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     setRecallSession(null);
     setDraftValue(commandText, "history");
     setHistoryOpen(false);
+    clearCommandCompletionState();
     setAutocompleteItems([]);
     setPathCompletionItems([]);
     setAutocompleteIndex(null);
@@ -726,6 +766,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
 
     setIsSubmitting(true);
     setRecallSession(null);
+    clearCommandCompletionState();
     setAutocompleteItems([]);
     setPathCompletionItems([]);
     setAutocompleteIndex(null);
@@ -798,6 +839,33 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     return true;
   });
 
+  const navigateCommandCompletions = useEffectEvent(
+    (direction: "next" | "prev") => {
+      if (!commandCompletionVisible) {
+        return false;
+      }
+
+      setAutocompleteIndex((current) => {
+        if (commandCompletionItems.length === 0) {
+          return null;
+        }
+
+        if (current === null) {
+          return direction === "next" ? 0 : commandCompletionItems.length - 1;
+        }
+
+        if (direction === "prev") {
+          return current <= 0 ? null : current - 1;
+        }
+
+        const nextIndex = current + 1;
+        return clampIndex(nextIndex, commandCompletionItems.length);
+      });
+
+      return true;
+    },
+  );
+
   const navigatePathCompletions = useEffectEvent(
     (direction: "next" | "prev") => {
       if (!pathCompletionVisible) {
@@ -866,6 +934,112 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     }
   });
 
+  const requestCommandCompletions = useEffectEvent(async () => {
+    const requestId = commandCompletionRequestRef.current + 1;
+    commandCompletionRequestRef.current = requestId;
+    setCommandCompletionLoadingMore(false);
+
+    try {
+      const response = await api.app.getCommandCompletions({
+        draft,
+        cwd: shellContext.cwd,
+        limit: COMMAND_COMPLETION_PAGE_SIZE,
+        offset: 0,
+      });
+
+      if (commandCompletionRequestRef.current !== requestId) {
+        return {
+          found: false,
+          resolvedCommand: false,
+          yieldToPath: false,
+        };
+      }
+
+      startTransition(() => {
+        setCommandCompletionItems(response.items);
+        setCommandCompletionHasMore(response.hasMore);
+        setPathCompletionItems([]);
+        setAutocompleteIndex(null);
+      });
+
+      return {
+        found: response.items.length > 0,
+        resolvedCommand: response.resolvedCommand,
+        yieldToPath: response.yieldToPath,
+      };
+    } catch {
+      if (commandCompletionRequestRef.current !== requestId) {
+        return {
+          found: false,
+          resolvedCommand: false,
+          yieldToPath: false,
+        };
+      }
+
+      clearCommandCompletionState();
+      setAutocompleteIndex(null);
+      return {
+        found: false,
+        resolvedCommand: false,
+        yieldToPath: false,
+      };
+    }
+  });
+
+  const requestMoreCommandCompletions = useEffectEvent(async () => {
+    if (
+      commandCompletionLoadingMore ||
+      !commandCompletionHasMore ||
+      commandCompletionItems.length === 0
+    ) {
+      return;
+    }
+
+    const requestId = commandCompletionRequestRef.current;
+    setCommandCompletionLoadingMore(true);
+
+    try {
+      const response = await api.app.getCommandCompletions({
+        draft,
+        cwd: shellContext.cwd,
+        limit: COMMAND_COMPLETION_PAGE_SIZE,
+        offset: commandCompletionItems.length,
+      });
+
+      if (commandCompletionRequestRef.current !== requestId) {
+        return;
+      }
+
+      setCommandCompletionItems((currentItems) => {
+        const merged = new Map<string, CommandCompletionItem>();
+
+        for (const item of currentItems) {
+          merged.set(
+            `${item.kind}:${item.label}:${item.nextValue}:${item.source}`,
+            item,
+          );
+        }
+
+        for (const item of response.items) {
+          merged.set(
+            `${item.kind}:${item.label}:${item.nextValue}:${item.source}`,
+            item,
+          );
+        }
+
+        return [...merged.values()];
+      });
+      setCommandCompletionHasMore(response.hasMore);
+      setCommandCompletionLoadingMore(false);
+    } catch {
+      if (commandCompletionRequestRef.current !== requestId) {
+        return;
+      }
+
+      setCommandCompletionLoadingMore(false);
+    }
+  });
+
   const requestPathCompletions = useEffectEvent(async () => {
     const requestId = pathCompletionRequestRef.current + 1;
     pathCompletionRequestRef.current = requestId;
@@ -881,6 +1055,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     }
 
     startTransition(() => {
+      clearCommandCompletionState();
       setPathCompletionItems(response.items);
       setAutocompleteIndex(null);
     });
@@ -890,6 +1065,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
 
   const clearEditorDraft = useEffectEvent(() => {
     setRecallSession(null);
+    clearCommandCompletionState();
     setAutocompleteItems([]);
     setPathCompletionItems([]);
     setAutocompleteIndex(null);
@@ -898,13 +1074,24 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   });
 
   const closeInlineSuggestions = useEffectEvent(() => {
+    commandCompletionRequestRef.current += 1;
     autocompleteRequestRef.current += 1;
     pathCompletionRequestRef.current += 1;
     historyRecallRequestRef.current += 1;
     setRecallSession(null);
+    clearCommandCompletionState();
     setAutocompleteItems([]);
     setPathCompletionItems([]);
     setAutocompleteIndex(null);
+  });
+
+  const acceptCommandCompletion = useEffectEvent(() => {
+    if (!selectedCommandCompletion) {
+      return false;
+    }
+
+    applyCommandCompletionSelection(selectedCommandCompletion);
+    return true;
   });
 
   const acceptAutocomplete = useEffectEvent(() => {
@@ -931,6 +1118,10 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     }
 
     setRecallSession(null);
+    clearCommandCompletionState();
+    setPathCompletionItems([]);
+    setAutocompleteItems([]);
+    setAutocompleteIndex(null);
     setDraftValue(selectedRecallItem.commandText, "system");
     focusEditorAtEnd();
     return true;
@@ -938,6 +1129,10 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
 
   const applyRecallResult = useEffectEvent((commandText: string) => {
     setRecallSession(null);
+    clearCommandCompletionState();
+    setPathCompletionItems([]);
+    setAutocompleteItems([]);
+    setAutocompleteIndex(null);
     setDraftValue(commandText, "system");
     focusEditorAtEnd();
   });
@@ -1038,7 +1233,12 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         !event.metaKey &&
         !event.ctrlKey &&
         !event.altKey &&
-        (recallVisible || pathCompletionVisible || historyAutocompleteVisible)
+        (
+          recallVisible ||
+          commandCompletionVisible ||
+          pathCompletionVisible ||
+          historyAutocompleteVisible
+        )
       ) {
         event.preventDefault();
         closeInlineSuggestions();
@@ -1056,6 +1256,20 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
       ) {
         event.preventDefault();
         acceptRecallSelection();
+        return true;
+      }
+
+      if (
+        event.key === "Enter" &&
+        !event.shiftKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        commandCompletionVisible &&
+        autocompleteIndex !== null
+      ) {
+        event.preventDefault();
+        acceptCommandCompletion();
         return true;
       }
 
@@ -1106,6 +1320,19 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         !event.metaKey &&
         !event.ctrlKey &&
         !event.altKey &&
+        commandCompletionVisible
+      ) {
+        event.preventDefault();
+        navigateCommandCompletions("next");
+        return true;
+      }
+
+      if (
+        event.key === "ArrowDown" &&
+        !event.shiftKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
         pathCompletionVisible
       ) {
         event.preventDefault();
@@ -1134,15 +1361,22 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         !event.altKey
       ) {
         event.preventDefault();
-        const pathPreferred = shouldRequestPathCompletions(draft);
-
-        if (pathPreferred) {
-          if (pathCompletionVisible) {
-            navigatePathCompletions("next");
+        if (commandCompletionVisible) {
+          if (autocompleteIndex === null) {
+            navigateCommandCompletions("next");
             return true;
           }
 
-          void requestPathCompletions();
+          if (
+            selectedCommandCompletion &&
+            selectedCommandCompletion.nextValue.trim() === draft.trim() &&
+            commandCompletionItems.length > 1
+          ) {
+            navigateCommandCompletions("next");
+            return true;
+          }
+
+          acceptCommandCompletion();
           return true;
         }
 
@@ -1170,13 +1404,51 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
           return true;
         }
 
-        void requestAutocomplete().then((didFindHistory) => {
-          if (didFindHistory) {
+        void requestCommandCompletions().then((commandCompletionResult) => {
+          if (commandCompletionResult.found) {
             return;
           }
 
-          void requestPathCompletions();
+          if (commandCompletionResult.yieldToPath) {
+            void requestPathCompletions();
+            return;
+          }
+
+          const pathPreferred =
+            !commandCompletionResult.resolvedCommand &&
+            shouldRequestPathCompletions(draft);
+
+          if (pathPreferred) {
+            void requestPathCompletions();
+            return;
+          }
+
+          void requestAutocomplete().then((didFindHistory) => {
+            if (didFindHistory) {
+              return;
+            }
+
+            if (commandCompletionResult.resolvedCommand) {
+              return;
+            }
+
+            void requestPathCompletions();
+          });
         });
+        return true;
+      }
+
+      if (
+        event.key === "ArrowUp" &&
+        !event.shiftKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        commandCompletionVisible &&
+        autocompleteIndex !== null
+      ) {
+        event.preventDefault();
+        navigateCommandCompletions("prev");
         return true;
       }
 
@@ -1396,13 +1668,21 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                     />
                     <ShellEditor
                       autocompleteItems={autocompleteItems}
+                      commandCompletionItems={commandCompletionItems}
+                      commandHasMore={commandCompletionHasMore}
+                      commandLoadingMore={commandCompletionLoadingMore}
+                      commandVisible={commandCompletionVisible}
                       historyVisible={historyAutocompleteVisible}
                       onHighlightIndex={setAutocompleteIndex}
                       onHighlightRecallIndex={hoverRecallHistory}
+                      onLoadMoreCommandCompletions={() => {
+                        void requestMoreCommandCompletions();
+                      }}
                       onSelectRecallCommand={applyRecallResult}
                       recallItems={recallSession?.items ?? []}
                       recallVisible={recallVisible}
                       selectedRecallItem={selectedRecallItem}
+                      onSelectCommandCompletion={applyCommandCompletionSelection}
                       onSelectAutocomplete={applyAutocompleteSelection}
                       onSelectPathCompletion={applyPathCompletionSelection}
                       pathCompletionItems={pathCompletionItems}
@@ -1511,14 +1791,20 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
 
 type ShellEditorProps = {
   autocompleteItems: HistoryAutocompleteItem[];
+  commandCompletionItems: CommandCompletionItem[];
+  commandHasMore: boolean;
+  commandLoadingMore: boolean;
+  commandVisible: boolean;
   historyVisible: boolean;
   onHighlightIndex: (index: number | null) => void;
   onHighlightRecallIndex: (index: number) => void;
+  onLoadMoreCommandCompletions: () => void;
   recallItems: HistoryRecallItem[];
   recallVisible: boolean;
   onSelectRecallCommand: (commandText: string) => void;
   selectedRecallItem: HistoryRecallItem | null;
   value: string;
+  onSelectCommandCompletion: (item: CommandCompletionItem) => void;
   onSelectAutocomplete: (commandText: string) => void;
   onSelectPathCompletion: (item: PathCompletionItem) => void;
   disabled: boolean;
@@ -1549,14 +1835,20 @@ const TERMINAL_SESSION_RESET = "\u001bc\u001b[3J\u001b[2J\u001b[H";
 
 const ShellEditor = ({
   autocompleteItems,
+  commandCompletionItems,
+  commandHasMore,
+  commandLoadingMore,
+  commandVisible,
   historyVisible,
   onHighlightIndex,
   onHighlightRecallIndex,
+  onLoadMoreCommandCompletions,
   onSelectRecallCommand,
   recallItems,
   recallVisible,
   selectedRecallItem,
   value,
+  onSelectCommandCompletion,
   onSelectAutocomplete,
   onSelectPathCompletion,
   disabled,
@@ -1591,7 +1883,8 @@ const ShellEditor = ({
   }, [value, disabled, ref]);
 
   const scrollEditor = editorHeight >= EDITOR_MAX_HEIGHT;
-  const suggestionVisible = pathVisible || historyVisible || recallVisible;
+  const suggestionVisible =
+    commandVisible || pathVisible || historyVisible || recallVisible;
 
   useLayoutEffect(() => {
     const textarea = ref.current;
@@ -1605,6 +1898,7 @@ const ShellEditor = ({
     setFloatingAnchor(getFloatingSuggestionAnchor(textarea, container));
   }, [
     editorHeight,
+    commandVisible,
     historyVisible,
     pathVisible,
     recallVisible,
@@ -1700,10 +1994,16 @@ const ShellEditor = ({
         <FloatingSuggestionDropdown
           anchor={floatingAnchor}
           autocompleteItems={autocompleteItems}
+          commandCompletionItems={commandCompletionItems}
+          commandHasMore={commandHasMore}
+          commandLoadingMore={commandLoadingMore}
+          commandVisible={commandVisible}
           historyVisible={historyVisible}
           onHighlightIndex={onHighlightIndex}
           onHighlightRecallIndex={onHighlightRecallIndex}
+          onLoadMoreCommandCompletions={onLoadMoreCommandCompletions}
           onSelectRecallCommand={onSelectRecallCommand}
+          onSelectCommandCompletion={onSelectCommandCompletion}
           onSelectAutocomplete={onSelectAutocomplete}
           onSelectPathCompletion={onSelectPathCompletion}
           pathCompletionItems={pathCompletionItems}
@@ -1849,9 +2149,15 @@ function CommandCard({
 function FloatingSuggestionDropdown({
   anchor,
   autocompleteItems,
+  commandCompletionItems,
+  commandHasMore,
+  commandLoadingMore,
+  commandVisible,
   historyVisible,
   onHighlightIndex,
   onHighlightRecallIndex,
+  onLoadMoreCommandCompletions,
+  onSelectCommandCompletion,
   onSelectRecallCommand,
   onSelectAutocomplete,
   onSelectPathCompletion,
@@ -1864,9 +2170,15 @@ function FloatingSuggestionDropdown({
 }: {
   anchor: FloatingSuggestionAnchor;
   autocompleteItems: HistoryAutocompleteItem[];
+  commandCompletionItems: CommandCompletionItem[];
+  commandHasMore: boolean;
+  commandLoadingMore: boolean;
+  commandVisible: boolean;
   historyVisible: boolean;
   onHighlightIndex: (index: number | null) => void;
   onHighlightRecallIndex: (index: number) => void;
+  onLoadMoreCommandCompletions: () => void;
+  onSelectCommandCompletion: (item: CommandCompletionItem) => void;
   onSelectRecallCommand: (commandText: string) => void;
   onSelectAutocomplete: (commandText: string) => void;
   onSelectPathCompletion: (item: PathCompletionItem) => void;
@@ -1877,7 +2189,9 @@ function FloatingSuggestionDropdown({
   selectedIndex: number | null;
   selectedRecallItem: HistoryRecallItem | null;
 }) {
-  const items = pathVisible
+  const items = commandVisible
+    ? commandCompletionItems
+    : pathVisible
     ? pathCompletionItems
     : recallVisible
       ? recallItems
@@ -1893,7 +2207,14 @@ function FloatingSuggestionDropdown({
     selectedItemRef.current.scrollIntoView({
       block: "nearest",
     });
-  }, [items.length, pathVisible, recallVisible, selectedIndex, selectedRecallItem?.id]);
+  }, [
+    commandVisible,
+    items.length,
+    pathVisible,
+    recallVisible,
+    selectedIndex,
+    selectedRecallItem?.id,
+  ]);
 
   if (items.length === 0) {
     return null;
@@ -1909,11 +2230,76 @@ function FloatingSuggestionDropdown({
       }}
     >
       <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2 text-[10px] uppercase tracking-[0.22em] text-[color:var(--text-muted)]">
-        <span>{pathVisible ? "Path" : recallVisible ? "Recall" : "History"}</span>
-        <span>{items.length}</span>
+        <span>
+          {commandVisible
+            ? "Command"
+            : pathVisible
+              ? "Path"
+              : recallVisible
+                ? "Recall"
+                : "History"}
+        </span>
+        <span>
+          {items.length}
+          {commandVisible && commandHasMore ? "+" : ""}
+          {commandVisible && commandLoadingMore ? "…" : ""}
+        </span>
       </div>
-      <div ref={listRef} className="mishell-overlay-scroll max-h-56 overflow-y-auto">
-        {pathVisible
+      <div
+        ref={listRef}
+        className="mishell-overlay-scroll max-h-56 overflow-y-auto"
+        onScroll={(event) => {
+          if (
+            !commandVisible ||
+            !commandHasMore ||
+            commandLoadingMore
+          ) {
+            return;
+          }
+
+          const node = event.currentTarget;
+          const distanceFromBottom = node.scrollHeight - node.clientHeight - node.scrollTop;
+
+          if (distanceFromBottom <= 32) {
+            onLoadMoreCommandCompletions();
+          }
+        }}
+      >
+        {commandVisible
+          ? commandCompletionItems.map((item, index) => (
+              <button
+                key={`${item.kind}-${item.label}-${index}`}
+                ref={selectedIndex === index ? selectedItemRef : null}
+                type="button"
+                className={cn(
+                  "flex w-full items-start justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2.5 text-left transition last:border-b-0",
+                  selectedIndex === index
+                    ? "bg-[color:color-mix(in_srgb,var(--accent)_14%,transparent)]"
+                    : "hover:bg-white/4",
+                )}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  onSelectCommandCompletion(item);
+                }}
+                onMouseEnter={() => {
+                  onHighlightIndex(index);
+                }}
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-mono text-sm text-[color:var(--text-primary)]">
+                    {item.label}
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[color:var(--text-secondary)]">
+                    {item.description ? <span>{item.description}</span> : null}
+                    {item.detail ? <span>{item.detail}</span> : null}
+                  </div>
+                </div>
+                <span className="shrink-0 pt-0.5 text-[10px] uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                  {item.kind}
+                </span>
+              </button>
+            ))
+          : pathVisible
           ? pathCompletionItems.map((item, index) => (
               <button
                 key={`${item.path}-${item.label}`}
@@ -2020,6 +2406,11 @@ function FloatingSuggestionDropdown({
                 </button>
               ))
             : null}
+        {commandVisible && commandLoadingMore ? (
+          <div className="border-t border-[color:var(--border)] px-3 py-2 text-[11px] text-[color:var(--text-secondary)]">
+            Loading more…
+          </div>
+        ) : null}
       </div>
     </div>
   );
