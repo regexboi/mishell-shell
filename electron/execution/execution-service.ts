@@ -158,6 +158,14 @@ const CODEX_TERMINAL_QUERY_REPLIES = [
     query: "\u001b[c",
     response: "\u001b[?1;2c",
   },
+  {
+    query: "\u001b]10;?\u001b\\",
+    response: "\u001b]10;#ffffff\u0007",
+  },
+  {
+    query: "\u001b]11;?\u001b\\",
+    response: "\u001b]11;#000000\u0007",
+  },
 ] as const;
 
 export function createExecutionService(

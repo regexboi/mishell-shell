@@ -61,14 +61,19 @@ describe("interceptTerminalHostQueries", () => {
   it("answers Codex startup host queries without forwarding them", () => {
     expect(
       interceptTerminalHostQueries({
-        chunk: "\u001b[6n\u001b[chello",
+        chunk: "\u001b[6n\u001b[c\u001b]10;?\u001b\\\u001b]11;?\u001b\\hello",
         pendingBuffer: "",
         profile: "codex",
       }),
     ).toEqual({
       forwardChunk: "hello",
       nextPendingBuffer: "",
-      responses: ["\u001b[1;1R", "\u001b[?1;2c"],
+      responses: [
+        "\u001b[1;1R",
+        "\u001b[?1;2c",
+        "\u001b]10;#ffffff\u0007",
+        "\u001b]11;#000000\u0007",
+      ],
     });
   });
 
