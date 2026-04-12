@@ -7,6 +7,7 @@ import type {
   PathCompletionItem,
   RunCommandRequest,
 } from "@shared/contracts";
+import { shouldUseTerminalMode } from "@shared/terminal-mode";
 
 const previewListeners = new Set<(event: ExecutionEvent) => void>();
 const previewHistory: HistoryEntry[] = [];
@@ -73,7 +74,7 @@ const browserFallback: MishellApi = {
     async runCommand(input: RunCommandRequest) {
       const executionId = `preview-${crypto.randomUUID()}`;
       const startedAt = new Date().toISOString();
-      const interactive = shouldPreviewUseTerminalMode(input.commandText);
+      const interactive = shouldUseTerminalMode(input.commandText);
 
       queueMicrotask(() => {
         previewListeners.forEach((listener) => {
@@ -332,10 +333,4 @@ const browserFallback: MishellApi = {
 
 export function getMishellApi(): MishellApi {
   return window.mishell ?? browserFallback;
-}
-
-function shouldPreviewUseTerminalMode(commandText: string) {
-  return /(^|\s)(codex|lazygit|vim|nvim|vi|less|man|ssh|tmux|top|htop|btop|nano)(\s|$)/i.test(
-    commandText,
-  );
 }

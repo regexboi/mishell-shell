@@ -200,10 +200,17 @@ export const executionCompletedEventSchema = z.object({
   shellContext: shellContextSchema,
 });
 
+export const executionPresentationChangedEventSchema = z.object({
+  type: z.literal("presentation-changed"),
+  executionId: z.string(),
+  presentation: commandPresentationSchema,
+});
+
 export const executionEventSchema = z.discriminatedUnion("type", [
   executionStartedEventSchema,
   executionOutputEventSchema,
   executionCompletedEventSchema,
+  executionPresentationChangedEventSchema,
 ]);
 
 export type BootstrapPayload = z.infer<typeof bootstrapPayloadSchema>;

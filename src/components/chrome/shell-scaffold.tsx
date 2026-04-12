@@ -391,6 +391,33 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
       return;
     }
 
+    if (event.type === "presentation-changed") {
+      if (event.presentation === "terminal") {
+        terminalOutputBacklogRef.current.set(event.executionId, [
+          TERMINAL_SESSION_RESET,
+        ]);
+        setActiveTerminalExecutionId(event.executionId);
+      }
+
+      setExecutions((current) =>
+        current.map((execution) =>
+          execution.id === event.executionId
+            ? {
+                ...execution,
+                presentation: event.presentation,
+                output:
+                  event.presentation === "terminal"
+                    ? "Terminal mode attached. Focus the compatibility surface and use Ctrl+C when the active program accepts it."
+                    : execution.output,
+                outputPreview:
+                  event.presentation === "terminal" ? "" : execution.outputPreview,
+              }
+            : execution,
+        ),
+      );
+      return;
+    }
+
     if (event.type === "output") {
       if (event.target === "terminal") {
         if (

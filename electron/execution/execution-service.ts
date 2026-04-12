@@ -24,6 +24,10 @@ import type {
   TerminalInputRequest,
   TerminalResizeRequest,
 } from "@shared/contracts";
+import {
+  getPrimaryCommand,
+  shouldUseTerminalMode as shouldCommandUseTerminalMode,
+} from "@shared/terminal-mode";
 
 import type { DatabaseContext } from "../db/database";
 import {
@@ -69,6 +73,11 @@ type InterceptedTerminalChunk = {
   responses: string[];
 };
 
+type TerminalPromotionScanResult = {
+  nextPendingBuffer: string;
+  shouldPromote: boolean;
+};
+
 type CompletionPathApi = Pick<
   typeof path.posix,
   "isAbsolute" | "join" | "parse" | "resolve" | "sep"
@@ -97,56 +106,6 @@ export type ExecutionService = {
   dispose: () => void;
 };
 
-const TERMINAL_MODE_COMMANDS = new Set([
-  "bash",
-  "btop",
-  "claude",
-  "cmd",
-  "cmd.exe",
-  "codex",
-  "fish",
-  "fzf",
-  "gitui",
-  "htop",
-  "k9s",
-  "lazydocker",
-  "lazygit",
-  "less",
-  "man",
-  "more",
-  "nano",
-  "nvim",
-  "powershell",
-  "powershell.exe",
-  "pwsh",
-  "pwsh.exe",
-  "screen",
-  "ssh",
-  "tig",
-  "tmux",
-  "top",
-  "vi",
-  "vim",
-  "watch",
-  "zsh",
-]);
-
-const NON_INTERACTIVE_FLAGS = new Set([
-  "--help",
-  "--version",
-  "-h",
-  "-v",
-  "-V",
-]);
-
-const LEADING_COMMAND_WRAPPERS = new Set([
-  "builtin",
-  "command",
-  "exec",
-  "nohup",
-  "time",
-]);
-
 const INTERRUPT_INPUT = "\u0003";
 
 const CODEX_TERMINAL_QUERY_REPLIES = [
@@ -166,6 +125,12 @@ const CODEX_TERMINAL_QUERY_REPLIES = [
     query: "\u001b]11;?\u001b\\",
     response: "\u001b]11;#000000\u0007",
   },
+] as const;
+
+const TERMINAL_MODE_TRIGGER_SEQUENCES = [
+  "\u001b[?47h",
+  "\u001b[?1047h",
+  "\u001b[?1049h",
 ] as const;
 
 export function createExecutionService(
@@ -245,6 +210,10 @@ export function createExecutionService(
   ): RunCommandResponse => {
     const executionId = randomUUID();
     const marker = `__MISHELL_${executionId.replaceAll("-", "_")}__`;
+    const cwdCapturePath = path.join(
+      options.outputsDirectory,
+      `${executionId}.cwd`,
+    );
     const baseExecution = buildExecution({
       executionId,
       commandText: input.commandText,
@@ -259,6 +228,8 @@ export function createExecutionService(
 
     let rawOutput = "";
     let finished = false;
+    let promotedExecution: CommandExecution | null = null;
+    let terminalPromotionScanBuffer = "";
 
     const complete = (result: {
       exitCode: number | null;
@@ -286,6 +257,8 @@ export function createExecutionService(
         outputPath,
         emitEvent,
       });
+
+      fs.rmSync(cwdCapturePath, { force: true });
     };
 
     try {
@@ -300,6 +273,7 @@ export function createExecutionService(
           env: buildShellEnvironment({
             commandText: input.commandText,
             marker,
+            cwdCapturePath,
           }),
         },
       );
@@ -308,6 +282,103 @@ export function createExecutionService(
 
       child.onData((chunk) => {
         rawOutput += chunk;
+
+        if (promotedExecution) {
+          const activeExecution = activeTerminalExecutions.get(executionId);
+
+          if (!activeExecution) {
+            return;
+          }
+
+          activeExecution.transcriptStream.write(chunk);
+
+          const interceptedChunk = interceptTerminalHostQueries({
+            chunk,
+            pendingBuffer: activeExecution.hostQueryBuffer,
+            profile: activeExecution.queryReplyProfile,
+          });
+
+          activeExecution.hostQueryBuffer = interceptedChunk.nextPendingBuffer;
+
+          for (const response of interceptedChunk.responses) {
+            child.write(response);
+          }
+
+          if (interceptedChunk.forwardChunk.length === 0) {
+            return;
+          }
+
+          emitEvent({
+            type: "output",
+            executionId,
+            chunk: interceptedChunk.forwardChunk,
+            target: "terminal",
+          });
+          return;
+        }
+
+        const promotionScan = scanForTerminalModeTrigger({
+          chunk,
+          pendingBuffer: terminalPromotionScanBuffer,
+        });
+
+        terminalPromotionScanBuffer = promotionScan.nextPendingBuffer;
+
+        if (promotionScan.shouldPromote) {
+          const transcriptPath = path.join(
+            options.outputsDirectory,
+            `${executionId}.pty.log`,
+          );
+          const transcriptStream = fs.createWriteStream(transcriptPath, {
+            flags: "a",
+            encoding: "utf8",
+          });
+          const queryReplyProfile = getTerminalQueryReplyProfile(input.commandText);
+          const promotedBaseExecution = {
+            ...baseExecution,
+            presentation: "terminal" as const,
+            output:
+              "Terminal mode attached. Focus the compatibility surface and use Ctrl+C when the active program accepts it.",
+          };
+          const interceptedChunk = interceptTerminalHostQueries({
+            chunk: rawOutput,
+            pendingBuffer: "",
+            profile: queryReplyProfile,
+          });
+
+          promotedExecution = promotedBaseExecution;
+          activeCardExecutions.delete(executionId);
+          activeTerminalExecutions.set(executionId, {
+            child,
+            cwdCapturePath,
+            hostQueryBuffer: interceptedChunk.nextPendingBuffer,
+            queryReplyProfile,
+            transcriptPath,
+            transcriptStream,
+          });
+          transcriptStream.write(rawOutput);
+
+          emitEvent({
+            type: "presentation-changed",
+            executionId,
+            presentation: "terminal",
+          });
+
+          for (const response of interceptedChunk.responses) {
+            child.write(response);
+          }
+
+          if (interceptedChunk.forwardChunk.length > 0) {
+            emitEvent({
+              type: "output",
+              executionId,
+              chunk: interceptedChunk.forwardChunk,
+              target: "terminal",
+            });
+          }
+
+          return;
+        }
 
         emitEvent({
           type: "output",
@@ -318,12 +389,37 @@ export function createExecutionService(
       });
 
       child.onExit(({ exitCode }) => {
+        if (promotedExecution) {
+          const activeExecution = activeTerminalExecutions.get(executionId);
+
+          if (activeExecution) {
+            activeExecution.hostQueryBuffer = "";
+          }
+
+          finishTerminalExecution({
+            executionId,
+            exitCode,
+            activeTerminalExecutions,
+            baseExecution: promotedExecution,
+            emitEvent,
+            finalizeExecution,
+            currentCwd:
+              parseExecutionOutput(rawOutput, marker).cwd ??
+              readRecordedCwd(cwdCapturePath) ??
+              shellContext.cwd,
+          });
+          return;
+        }
+
         const parsedOutput = parseExecutionOutput(rawOutput, marker);
 
         complete({
           exitCode: parsedOutput.exitCode ?? exitCode,
           output: parsedOutput.output,
-          cwd: parsedOutput.cwd ?? shellContext.cwd,
+          cwd:
+            parsedOutput.cwd ??
+            readRecordedCwd(cwdCapturePath) ??
+            shellContext.cwd,
         });
       });
     } catch (error) {
@@ -661,19 +757,7 @@ export function createOutputPreview(output: string) {
 }
 
 export function shouldUseTerminalMode(commandText: string) {
-  const tokens = tokenizeCommand(commandText);
-
-  if (tokens.length === 0) {
-    return false;
-  }
-
-  const { command, remaining } = extractPrimaryCommand(tokens);
-
-  if (!command || !TERMINAL_MODE_COMMANDS.has(command)) {
-    return false;
-  }
-
-  return !remaining.some((token) => NON_INTERACTIVE_FLAGS.has(token));
+  return shouldCommandUseTerminalMode(commandText);
 }
 
 function buildShellContext({
@@ -728,6 +812,7 @@ function buildCardShellArguments(executable: string) {
         'Write-Output ""',
         'Write-Output ($env:MISHELL_MARKER + "EXIT_CODE=" + $mishellExit)',
         'Write-Output ($env:MISHELL_MARKER + "CWD=" + (Get-Location).Path)',
+        'if ($env:MISHELL_CWD_FILE) { Set-Content -LiteralPath $env:MISHELL_CWD_FILE -Value (Get-Location).Path -NoNewline }',
         "exit $mishellExit",
       ].join("; "),
     ];
@@ -745,6 +830,7 @@ function buildCardShellArguments(executable: string) {
         "echo.",
         "echo %MISHELL_MARKER%EXIT_CODE=!MISHELL_EXIT!",
         "echo %MISHELL_MARKER%CWD=!CD!",
+        'if defined MISHELL_CWD_FILE cd > "%MISHELL_CWD_FILE%"',
         "exit /b !MISHELL_EXIT!",
       ].join(" & "),
     ];
@@ -758,6 +844,7 @@ function buildCardShellArguments(executable: string) {
         "set mishell_exit $status",
         'printf "\\n%sEXIT_CODE=%s\\n" "$MISHELL_MARKER" "$mishell_exit"',
         'printf "%sCWD=%s\\n" "$MISHELL_MARKER" "$PWD"',
+        'if test -n "$MISHELL_CWD_FILE"; pwd > "$MISHELL_CWD_FILE"; end',
         "exit $mishell_exit",
       ].join("; "),
     ];
@@ -770,6 +857,7 @@ function buildCardShellArguments(executable: string) {
       "mishell_exit=$?",
       'printf "\\n%sEXIT_CODE=%s\\n" "$MISHELL_MARKER" "$mishell_exit"',
       'printf "%sCWD=%s\\n" "$MISHELL_MARKER" "$PWD"',
+      'if [ -n "$MISHELL_CWD_FILE" ]; then pwd > "$MISHELL_CWD_FILE"; fi',
       'exit "$mishell_exit"',
     ].join("; "),
   ];
@@ -912,9 +1000,7 @@ function createTerminalSummary(exitCode: number) {
 function getTerminalQueryReplyProfile(
   commandText: string,
 ): TerminalQueryReplyProfile {
-  const { command } = extractPrimaryCommand(tokenizeCommand(commandText));
-
-  return command === "codex" ? "codex" : null;
+  return getPrimaryCommand(commandText) === "codex" ? "codex" : null;
 }
 
 export function interceptTerminalHostQueries({
@@ -1040,58 +1126,34 @@ function readFileSize(filePath: string) {
   return fs.statSync(filePath).size;
 }
 
-function tokenizeCommand(commandText: string) {
-  const tokens: string[] = [];
-  let current = "";
-  let quote: '"' | "'" | null = null;
-  let escaping = false;
+export function scanForTerminalModeTrigger({
+  chunk,
+  pendingBuffer,
+}: {
+  chunk: string;
+  pendingBuffer: string;
+}): TerminalPromotionScanResult {
+  const combined = `${pendingBuffer}${chunk}`;
 
-  for (const character of commandText) {
-    if (escaping) {
-      current += character;
-      escaping = false;
-      continue;
-    }
-
-    if (character === "\\") {
-      escaping = quote === "'" ? false : true;
-
-      if (!escaping) {
-        current += character;
-      }
-      continue;
-    }
-
-    if (quote) {
-      if (character === quote) {
-        quote = null;
-      } else {
-        current += character;
-      }
-      continue;
-    }
-
-    if (character === '"' || character === "'") {
-      quote = character;
-      continue;
-    }
-
-    if (/\s/.test(character)) {
-      if (current) {
-        tokens.push(current);
-        current = "";
-      }
-      continue;
-    }
-
-    current += character;
+  if (
+    TERMINAL_MODE_TRIGGER_SEQUENCES.some((sequence) =>
+      combined.includes(sequence)
+    )
+  ) {
+    return {
+      nextPendingBuffer: "",
+      shouldPromote: true,
+    };
   }
 
-  if (current) {
-    tokens.push(current);
-  }
+  const maxSequenceLength = Math.max(
+    ...TERMINAL_MODE_TRIGGER_SEQUENCES.map((sequence) => sequence.length),
+  );
 
-  return tokens;
+  return {
+    nextPendingBuffer: combined.slice(-(maxSequenceLength - 1)),
+    shouldPromote: false,
+  };
 }
 
 export function getCompletionContext(
@@ -1232,84 +1294,6 @@ function looksLikeWindowsPath(value: string) {
 
 function isExistingDirectory(candidate: string) {
   return fs.statSync(candidate).isDirectory();
-}
-
-function extractPrimaryCommand(tokens: string[]) {
-  let index = 0;
-
-  while (tokens[index] && isEnvAssignment(tokens[index]!)) {
-    index += 1;
-  }
-
-  while (tokens[index]) {
-    const token = tokens[index]!.toLowerCase();
-
-    if (token === "sudo") {
-      index += 1;
-
-      while (
-        tokens[index] &&
-        tokens[index] !== "--" &&
-        tokens[index]!.startsWith("-")
-      ) {
-        index += 1;
-      }
-
-      if (tokens[index] === "--") {
-        index += 1;
-      }
-
-      continue;
-    }
-
-    if (token === "env") {
-      index += 1;
-
-      while (tokens[index]) {
-        if (tokens[index] === "--") {
-          index += 1;
-          break;
-        }
-
-        if (
-          tokens[index]!.startsWith("-") ||
-          isEnvAssignment(tokens[index]!)
-        ) {
-          index += 1;
-          continue;
-        }
-
-        break;
-      }
-
-      continue;
-    }
-
-    if (LEADING_COMMAND_WRAPPERS.has(token)) {
-      index += 1;
-      continue;
-    }
-
-    const commandToken = tokens[index]!;
-    const normalizedCommand = commandToken
-      .split(/[\\/]/)
-      .pop()
-      ?.toLowerCase();
-
-    return {
-      command: normalizedCommand ?? null,
-      remaining: tokens.slice(index + 1).map((value) => value.toLowerCase()),
-    };
-  }
-
-  return {
-    command: null,
-    remaining: [],
-  };
-}
-
-function isEnvAssignment(token: string) {
-  return /^[A-Za-z_][A-Za-z0-9_]*=.*$/.test(token);
 }
 
 function escapeRegExp(value: string) {
