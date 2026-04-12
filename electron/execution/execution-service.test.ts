@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   createOutputPreview,
   getCompletionContext,
+  interceptTerminalHostQueries,
   parseExecutionOutput,
   shouldUseTerminalMode,
 } from "./execution-service";
@@ -53,6 +54,81 @@ describe("shouldUseTerminalMode", () => {
     expect(shouldUseTerminalMode("pnpm check")).toBe(false);
     expect(shouldUseTerminalMode("git status --short")).toBe(false);
     expect(shouldUseTerminalMode("vim --help")).toBe(false);
+  });
+});
+
+describe("interceptTerminalHostQueries", () => {
+  it("answers Codex startup host queries without forwarding them", () => {
+    expect(
+      interceptTerminalHostQueries({
+        chunk: "\u001b[6n\u001b[c\u001b]10;?\u001b\\\u001b]11;?\u001b\\hello",
+        pendingBuffer: "",
+        profile: "codex",
+      }),
+    ).toEqual({
+      forwardChunk: "hello",
+      nextPendingBuffer: "",
+      responses: [
+        "\u001b[1;1R",
+        "\u001b[?1;2c",
+        "\u001b]10;#ffffff\u0007",
+        "\u001b]11;#000000\u0007",
+      ],
+    });
+  });
+
+  it("buffers partial query chunks until the sequence is complete", () => {
+    const firstChunk = interceptTerminalHostQueries({
+      chunk: "\u001b[",
+      pendingBuffer: "",
+      profile: "codex",
+    });
+
+    expect(firstChunk).toEqual({
+      forwardChunk: "",
+      nextPendingBuffer: "\u001b[",
+      responses: [],
+    });
+
+    expect(
+      interceptTerminalHostQueries({
+        chunk: "6nready",
+        pendingBuffer: firstChunk.nextPendingBuffer,
+        profile: "codex",
+      }),
+    ).toEqual({
+      forwardChunk: "ready",
+      nextPendingBuffer: "",
+      responses: ["\u001b[1;1R"],
+    });
+  });
+
+  it("forwards content surrounding an intercepted query", () => {
+    expect(
+      interceptTerminalHostQueries({
+        chunk: "before\u001b[6nafter",
+        pendingBuffer: "",
+        profile: "codex",
+      }),
+    ).toEqual({
+      forwardChunk: "beforeafter",
+      nextPendingBuffer: "",
+      responses: ["\u001b[1;1R"],
+    });
+  });
+
+  it("passes through terminal output for non-codex sessions", () => {
+    expect(
+      interceptTerminalHostQueries({
+        chunk: "\u001b[6nplain output",
+        pendingBuffer: "",
+        profile: null,
+      }),
+    ).toEqual({
+      forwardChunk: "\u001b[6nplain output",
+      nextPendingBuffer: "",
+      responses: [],
+    });
   });
 });
 

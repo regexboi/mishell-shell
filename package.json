@@ -106,7 +106,7 @@
     "typescript": "^6.0.2",
     "vite": "^7.3.2",
     "vitest": "^4.1.2",
-    "wait-on": "^9.0.4"
+    "wait-on": "^9.0.5"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.2.7",
