@@ -51,12 +51,22 @@ type ParsedExecutionOutput = {
 type ActiveTerminalExecution = {
   child: IPty;
   cwdCapturePath: string;
+  hostQueryBuffer: string;
+  queryReplyProfile: TerminalQueryReplyProfile;
   transcriptPath: string;
   transcriptStream: fs.WriteStream;
 };
 
 type ActiveCardExecution = {
   child: IPty;
+};
+
+type TerminalQueryReplyProfile = "codex" | null;
+
+type InterceptedTerminalChunk = {
+  forwardChunk: string;
+  nextPendingBuffer: string;
+  responses: string[];
 };
 
 type CompletionPathApi = Pick<
@@ -138,6 +148,17 @@ const LEADING_COMMAND_WRAPPERS = new Set([
 ]);
 
 const INTERRUPT_INPUT = "\u0003";
+
+const CODEX_TERMINAL_QUERY_REPLIES = [
+  {
+    query: "\u001b[6n",
+    response: "\u001b[1;1R",
+  },
+  {
+    query: "\u001b[c",
+    response: "\u001b[?1;2c",
+  },
+] as const;
 
 export function createExecutionService(
   options: ExecutionServiceOptions,
@@ -364,22 +385,57 @@ export function createExecutionService(
       activeTerminalExecutions.set(executionId, {
         child,
         cwdCapturePath,
+        hostQueryBuffer: "",
+        queryReplyProfile: getTerminalQueryReplyProfile(input.commandText),
         transcriptPath,
         transcriptStream,
       });
 
       child.onData((chunk) => {
+        const activeExecution = activeTerminalExecutions.get(executionId);
+
+        if (!activeExecution) {
+          return;
+        }
+
         transcriptStream.write(chunk);
+
+        const interceptedChunk = interceptTerminalHostQueries({
+          chunk,
+          pendingBuffer: activeExecution.hostQueryBuffer,
+          profile: activeExecution.queryReplyProfile,
+        });
+
+        activeExecution.hostQueryBuffer = interceptedChunk.nextPendingBuffer;
+
+        for (const response of interceptedChunk.responses) {
+          child.write(response);
+        }
+
+        if (interceptedChunk.forwardChunk.length === 0) {
+          return;
+        }
 
         emitEvent({
           type: "output",
           executionId,
-          chunk,
+          chunk: interceptedChunk.forwardChunk,
           target: "terminal",
         });
       });
 
       child.onExit(({ exitCode }) => {
+        const activeExecution = activeTerminalExecutions.get(executionId);
+
+        if (activeExecution?.hostQueryBuffer) {
+          emitEvent({
+            type: "output",
+            executionId,
+            chunk: activeExecution.hostQueryBuffer,
+            target: "terminal",
+          });
+        }
+
         finishTerminalExecution({
           executionId,
           exitCode,
@@ -848,6 +904,71 @@ function createTerminalSummary(exitCode: number) {
   return exitCode === 0
     ? "Interactive session completed and returned to the shell UI."
     : `Interactive session exited with code ${exitCode}.`;
+}
+
+function getTerminalQueryReplyProfile(
+  commandText: string,
+): TerminalQueryReplyProfile {
+  const { command } = extractPrimaryCommand(tokenizeCommand(commandText));
+
+  return command === "codex" ? "codex" : null;
+}
+
+export function interceptTerminalHostQueries({
+  chunk,
+  pendingBuffer,
+  profile,
+}: {
+  chunk: string;
+  pendingBuffer: string;
+  profile: TerminalQueryReplyProfile;
+}): InterceptedTerminalChunk {
+  if (profile !== "codex") {
+    return {
+      forwardChunk: `${pendingBuffer}${chunk}`,
+      nextPendingBuffer: "",
+      responses: [],
+    };
+  }
+
+  const combined = `${pendingBuffer}${chunk}`;
+  let cursor = 0;
+  let forwardChunk = "";
+  const responses: string[] = [];
+
+  while (cursor < combined.length) {
+    const matchedQuery = CODEX_TERMINAL_QUERY_REPLIES.find(({ query }) =>
+      combined.startsWith(query, cursor)
+    );
+
+    if (matchedQuery) {
+      responses.push(matchedQuery.response);
+      cursor += matchedQuery.query.length;
+      continue;
+    }
+
+    const trailingSlice = combined.slice(cursor);
+    const pendingQueryPrefix = CODEX_TERMINAL_QUERY_REPLIES.find(({ query }) =>
+      query.startsWith(trailingSlice)
+    );
+
+    if (pendingQueryPrefix) {
+      return {
+        forwardChunk,
+        nextPendingBuffer: trailingSlice,
+        responses,
+      };
+    }
+
+    forwardChunk += combined[cursor];
+    cursor += 1;
+  }
+
+  return {
+    forwardChunk,
+    nextPendingBuffer: "",
+    responses,
+  };
 }
 
 export function resolvePathCompletions(
