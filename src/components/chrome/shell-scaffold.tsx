@@ -178,6 +178,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const historySearchInputRef = useRef<HTMLInputElement | null>(null);
   const feedScrollRef = useRef<HTMLDivElement | null>(null);
   const autocompleteRequestRef = useRef(0);
+  const pathCompletionRequestRef = useRef(0);
   const historySearchRequestRef = useRef(0);
   const historyRecallRequestRef = useRef(0);
   const terminalControllerRef = useRef<TerminalModeSurfaceController | null>(null);
@@ -839,11 +840,18 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   });
 
   const requestPathCompletions = useEffectEvent(async () => {
+    const requestId = pathCompletionRequestRef.current + 1;
+    pathCompletionRequestRef.current = requestId;
+
     const response = await api.app.getPathCompletions({
       draft,
       cwd: shellContext.cwd,
       limit: 24,
     });
+
+    if (pathCompletionRequestRef.current !== requestId) {
+      return false;
+    }
 
     startTransition(() => {
       setPathCompletionItems(response.items);
@@ -860,6 +868,16 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     setAutocompleteIndex(null);
     setDraftValue("", "system");
     focusEditorAtEnd();
+  });
+
+  const closeInlineSuggestions = useEffectEvent(() => {
+    autocompleteRequestRef.current += 1;
+    pathCompletionRequestRef.current += 1;
+    historyRecallRequestRef.current += 1;
+    setRecallSession(null);
+    setAutocompleteItems([]);
+    setPathCompletionItems([]);
+    setAutocompleteIndex(null);
   });
 
   const acceptAutocomplete = useEffectEvent(() => {
@@ -929,8 +947,8 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         setRecallSession({
           cwd: shellContext.cwd,
           originalDraft: draft,
-          items,
-          index: 0,
+          items: [...items].reverse(),
+          index: items.length - 1,
         });
         return;
       }
@@ -938,12 +956,12 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
       if (direction === "back") {
         setRecallSession({
           ...activeSession,
-          index: Math.min(activeSession.index + 1, activeSession.items.length - 1),
+          index: Math.max(activeSession.index - 1, 0),
         });
         return;
       }
 
-      if (activeSession.index <= 0) {
+      if (activeSession.index >= activeSession.items.length - 1) {
         setRecallSession(null);
         setDraftValue(activeSession.originalDraft, "system");
         focusEditorAtEnd();
@@ -952,7 +970,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
 
       setRecallSession({
         ...activeSession,
-        index: activeSession.index - 1,
+        index: activeSession.index + 1,
       });
     },
   );
@@ -984,6 +1002,19 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         }
 
         clearEditorDraft();
+        return true;
+      }
+
+      if (
+        event.key === "Escape" &&
+        !event.shiftKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        (recallVisible || pathCompletionVisible || historyAutocompleteVisible)
+      ) {
+        event.preventDefault();
+        closeInlineSuggestions();
         return true;
       }
 
@@ -1824,6 +1855,18 @@ function FloatingSuggestionDropdown({
     : recallVisible
       ? recallItems
       : autocompleteItems;
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const selectedItemRef = useRef<HTMLButtonElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!listRef.current || !selectedItemRef.current) {
+      return;
+    }
+
+    selectedItemRef.current.scrollIntoView({
+      block: "nearest",
+    });
+  }, [items.length, pathVisible, recallVisible, selectedIndex, selectedRecallItem?.id]);
 
   if (items.length === 0) {
     return null;
@@ -1842,11 +1885,12 @@ function FloatingSuggestionDropdown({
         <span>{pathVisible ? "Path" : recallVisible ? "Recall" : "History"}</span>
         <span>{items.length}</span>
       </div>
-      <div className="mishell-overlay-scroll max-h-56 overflow-y-auto">
+      <div ref={listRef} className="mishell-overlay-scroll max-h-56 overflow-y-auto">
         {pathVisible
           ? pathCompletionItems.map((item, index) => (
               <button
                 key={`${item.path}-${item.label}`}
+                ref={selectedIndex === index ? selectedItemRef : null}
                 type="button"
                 className={cn(
                   "flex w-full items-start justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2.5 text-left transition last:border-b-0",
@@ -1879,6 +1923,7 @@ function FloatingSuggestionDropdown({
             ? recallItems.map((item, index) => (
                 <button
                   key={`${item.id}-${item.startedAt}`}
+                  ref={selectedRecallItem?.id === item.id ? selectedItemRef : null}
                   type="button"
                   className={cn(
                     "flex w-full items-start justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2.5 text-left transition last:border-b-0",
@@ -1915,6 +1960,7 @@ function FloatingSuggestionDropdown({
             ? autocompleteItems.map((item, index) => (
                 <button
                   key={`${item.commandText}-${item.lastStartedAt}`}
+                  ref={selectedIndex === index ? selectedItemRef : null}
                   type="button"
                   className={cn(
                     "flex w-full items-start justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2.5 text-left transition last:border-b-0",
@@ -1976,6 +2022,17 @@ function HistorySearchDialog({
   onSelectCommand: (commandText: string) => void;
 }) {
   const selectedResult = results[selectedIndex] ?? results[0] ?? null;
+  const selectedResultRef = useRef<HTMLButtonElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!selectedResultRef.current) {
+      return;
+    }
+
+    selectedResultRef.current.scrollIntoView({
+      block: "nearest",
+    });
+  }, [results.length, selectedIndex]);
 
   return (
     <DialogContent
@@ -2048,6 +2105,7 @@ function HistorySearchDialog({
                 {results.map((item, index) => (
                   <button
                     key={item.id}
+                    ref={index === selectedIndex ? selectedResultRef : null}
                     className={cn(
                       "grid gap-3 bg-[color:var(--panel-muted)] px-4 py-4 text-left transition",
                       index === selectedIndex &&
