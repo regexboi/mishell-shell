@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,6 +29,8 @@ const DYNAMIC_GENERATOR_COMMAND_ALLOWLIST = new Set([
   "rustup",
   "sh",
 ]);
+const COMPLETION_GENERATOR_TIMEOUT_MS = 1200;
+const COMPLETION_GENERATOR_KILL_GRACE_MS = 150;
 const WRAPPER_OPTIONS_WITH_ARGUMENT = new Map<string, Set<string>>([
   [
     "env",
@@ -561,9 +563,9 @@ async function resolveActiveCommandContext(
   }
 
   const currentToken = parsedDraft.currentToken;
-  const replacementStart = currentToken?.start ?? draftLength;
-  const replacementEnd = currentToken?.end ?? replacementStart;
-  const query = currentToken?.value ?? "";
+  let replacementStart = currentToken?.start ?? draftLength;
+  let replacementEnd = currentToken?.end ?? replacementStart;
+  let query = currentToken?.value ?? "";
   const commandTokens = parsedDraft.tokens
     .slice(commandTokenIndex)
     .map((token) => token.value);
@@ -632,6 +634,24 @@ async function resolveActiveCommandContext(
   const pendingArgument = pendingOptionArgument
     ? getOptionArgument(pendingOptionArgument.option, pendingOptionArgument.argumentIndex)
     : null;
+  const inlineOptionValueContext =
+    currentToken && !parsedDraft.trailingWhitespace
+      ? resolveInlineOptionValueContext(
+          [
+            ...getPersistentOptions(ancestors.map((ancestor) => ancestor.spec)),
+            ...getOptions(current.spec),
+          ],
+          currentToken,
+        )
+      : null;
+  const activePendingArgument =
+    inlineOptionValueContext?.argument ?? pendingArgument;
+
+  if (inlineOptionValueContext) {
+    query = inlineOptionValueContext.query;
+    replacementStart = inlineOptionValueContext.replacementStart;
+    replacementEnd = inlineOptionValueContext.replacementEnd;
+  }
 
   return {
     ancestors,
@@ -639,7 +659,7 @@ async function resolveActiveCommandContext(
     current,
     cwd,
     executeCommand,
-    pendingArgument,
+    pendingArgument: activePendingArgument,
     positionalIndex,
     query,
     replacementEnd,
@@ -1004,20 +1024,91 @@ function resolveGeneratorScript(
 }
 
 function createDefaultExecuteCommand(): ExecuteCommand {
-  return async ({ args = [], command, cwd }) => {
-    const result = spawnSync(command, args, {
-      cwd,
-      encoding: "utf8",
-      stdio: "pipe",
-      timeout: 1200,
-    });
+  return async ({ args = [], command, cwd }) =>
+    new Promise((resolve) => {
+      let stdout = "";
+      let stderr = "";
+      let settled = false;
+      let timedOut = false;
+      let forceKillTimer: NodeJS.Timeout | null = null;
+      let timeoutTimer: NodeJS.Timeout | null = null;
 
-    return {
-      exitCode: result.status,
-      stderr: result.stderr ?? "",
-      stdout: result.stdout ?? "",
-    };
-  };
+      const finish = (result: {
+        exitCode: number | null;
+        stderr: string;
+        stdout: string;
+      }) => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+
+        if (timeoutTimer) {
+          clearTimeout(timeoutTimer);
+        }
+
+        if (forceKillTimer) {
+          clearTimeout(forceKillTimer);
+        }
+
+        resolve(result);
+      };
+
+      try {
+        const child = spawn(command, args, {
+          cwd,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+
+        child.stdout?.setEncoding("utf8");
+        child.stdout?.on("data", (chunk: string) => {
+          stdout += chunk;
+        });
+
+        child.stderr?.setEncoding("utf8");
+        child.stderr?.on("data", (chunk: string) => {
+          stderr += chunk;
+        });
+
+        child.on("error", (error) => {
+          finish({
+            exitCode: 1,
+            stderr: appendGeneratorStderr(stderr, error.message),
+            stdout,
+          });
+        });
+
+        child.on("close", (exitCode) => {
+          finish({
+            exitCode: timedOut ? null : exitCode,
+            stderr,
+            stdout,
+          });
+        });
+
+        timeoutTimer = setTimeout(() => {
+          timedOut = true;
+          stderr = appendGeneratorStderr(
+            stderr,
+            `Completion generator timed out after ${COMPLETION_GENERATOR_TIMEOUT_MS} ms`,
+          );
+          child.kill("SIGTERM");
+          forceKillTimer = setTimeout(() => {
+            child.kill("SIGKILL");
+          }, COMPLETION_GENERATOR_KILL_GRACE_MS);
+          forceKillTimer.unref?.();
+        }, COMPLETION_GENERATOR_TIMEOUT_MS);
+        timeoutTimer.unref?.();
+      } catch (error) {
+        finish({
+          exitCode: 1,
+          stderr:
+            error instanceof Error ? error.message : "Failed to start completion generator",
+          stdout,
+        });
+      }
+    });
 }
 
 function createGeneratorExecutor(rootCommand: string, cwd: string): ExecuteCommand {
@@ -1232,6 +1323,36 @@ function getNextPendingOptionArgument(pendingOptionArgument: PendingOptionArgume
     argumentIndex: pendingOptionArgument.argumentIndex + 1,
     option: pendingOptionArgument.option,
   };
+}
+
+function resolveInlineOptionValueContext(
+  options: FigOption[],
+  currentToken: CompletionToken,
+) {
+  for (const option of options) {
+    for (const alias of toAliases(option.name)) {
+      if (!alias.startsWith("--") || !currentToken.value.startsWith(`${alias}=`)) {
+        continue;
+      }
+
+      const argument = getOptionArgument(option);
+
+      if (!argument) {
+        return null;
+      }
+
+      const query = currentToken.value.slice(alias.length + 1);
+
+      return {
+        argument,
+        query,
+        replacementEnd: currentToken.end,
+        replacementStart: currentToken.start + alias.length + 1,
+      };
+    }
+  }
+
+  return null;
 }
 
 function resolvePositionalArgument(
@@ -1494,6 +1615,14 @@ function wrapperOptionConsumesNextToken(wrapper: string, tokenValue: string) {
   }
 
   return false;
+}
+
+function appendGeneratorStderr(existing: string, message: string) {
+  if (!message) {
+    return existing;
+  }
+
+  return existing ? `${existing}\n${message}` : message;
 }
 
 function fuzzyScore(candidate: string, query: string) {

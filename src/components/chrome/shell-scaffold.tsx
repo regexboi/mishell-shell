@@ -1410,12 +1410,12 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         }
 
         void requestCommandCompletions().then((commandCompletionResult) => {
-          if (commandCompletionResult.found) {
+          if (commandCompletionResult.yieldToPath) {
+            void requestPathCompletions();
             return;
           }
 
-          if (commandCompletionResult.yieldToPath) {
-            void requestPathCompletions();
+          if (commandCompletionResult.found) {
             return;
           }
 

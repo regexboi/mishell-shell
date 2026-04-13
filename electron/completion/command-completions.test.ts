@@ -514,11 +514,49 @@ describe("resolveCommandCompletionsWithRegistry", () => {
     expect(response.yieldToPath).toBe(false);
   });
 
+  it("treats inline --option=value tokens as value completion context", async () => {
+    const response = await resolveCommandCompletionsWithRegistry(
+      {
+        cwd: "/tmp/project",
+        draft: "vite --logLevel=wa",
+        offset: 0,
+        limit: 12,
+      },
+      registry,
+    );
+
+    expect(response.items).toEqual([
+      expect.objectContaining({
+        kind: "value",
+        label: "warn",
+        nextValue: "vite --logLevel=warn ",
+      }),
+    ]);
+    expect(response.resolvedCommand).toBe(true);
+    expect(response.yieldToPath).toBe(false);
+  });
+
   it("yields to path completion when the active argument expects a filepath", async () => {
     const response = await resolveCommandCompletionsWithRegistry(
       {
         cwd: "/tmp/project",
         draft: "vite --config ",
+        offset: 0,
+        limit: 12,
+      },
+      registry,
+    );
+
+    expect(response.items).toEqual([]);
+    expect(response.resolvedCommand).toBe(true);
+    expect(response.yieldToPath).toBe(true);
+  });
+
+  it("yields to path completion for inline --option=value filepath arguments", async () => {
+    const response = await resolveCommandCompletionsWithRegistry(
+      {
+        cwd: "/tmp/project",
+        draft: "vite --config=src/",
         offset: 0,
         limit: 12,
       },
@@ -837,6 +875,62 @@ describe("resolveCommandCompletions", () => {
     });
 
     expect(response.items).toEqual([]);
+    expect(response.resolvedCommand).toBe(true);
+    expect(response.yieldToPath).toBe(false);
+  });
+
+  it("does not block the event loop while slow completion generators are running", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mishell-local-spec-"));
+    tempDirectories.push(directory);
+    const buildDirectory = path.join(directory, ".fig", "autocomplete", "build");
+    fs.mkdirSync(buildDirectory, { recursive: true });
+    fs.writeFileSync(
+      path.join(buildDirectory, "node.json"),
+      JSON.stringify({
+        name: "node",
+        options: [
+          {
+            args: {
+              generators: {
+                script: ["node", "-e", "setTimeout(() => {}, 2000)"],
+              },
+            },
+            name: "--slow",
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const startedAt = Date.now();
+    let timerElapsedMs = 0;
+    const timerTick = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        timerElapsedMs = Date.now() - startedAt;
+        resolve();
+      }, 0);
+    });
+
+    const responsePromise = resolveCommandCompletions({
+      cwd: directory,
+      draft: "node --slow ",
+      offset: 0,
+      limit: 8,
+    });
+
+    await timerTick;
+    expect(timerElapsedMs).toBeLessThan(700);
+
+    const response = await responsePromise;
+
+    expect(response.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "option",
+          label: "--slow",
+        }),
+      ]),
+    );
     expect(response.resolvedCommand).toBe(true);
     expect(response.yieldToPath).toBe(false);
   });
