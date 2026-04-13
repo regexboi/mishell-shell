@@ -86,6 +86,51 @@ const specs = {
       },
     ],
   },
+  aws: {
+    description: "AWS CLI",
+    name: "aws",
+    subcommands: [
+      {
+        description: "Amazon Elastic Compute Cloud",
+        name: "ec2",
+        subcommands: [
+          {
+            description: "Accepts a reserved instances exchange quote",
+            name: "accept-reserved-instances-exchange-quote",
+            options: [
+              {
+                args: [
+                  {
+                    suggestions: ["ri-123", "ri-456"],
+                  },
+                  {
+                    isVariadic: true,
+                    suggestions: ["ri-123", "ri-456"],
+                  },
+                ],
+                description: "Reserved instance IDs",
+                name: "--reserved-instance-ids",
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  base64: {
+    description: "Encode and decode using Base64 representation",
+    name: "base64",
+    options: [
+      {
+        args: {
+          suggestions: ["stdin", "-"],
+          template: "filepaths",
+        },
+        description: "Read input from a file or stdin",
+        name: ["--input", "-i"],
+      },
+    ],
+  },
   uv: {
     description: "An extremely fast Python package manager",
     name: "uv",
@@ -264,6 +309,8 @@ const registry = {
   },
   async listCommands() {
     return [
+      { name: "aws", source: "fig-public" as const },
+      { name: "base64", source: "fig-public" as const },
       { name: "docker", source: "fig-public" as const },
       { name: "git", source: "fig-public" as const },
       { name: "ls", source: "fig-public" as const },
@@ -515,6 +562,64 @@ describe("resolveCommandCompletionsWithRegistry", () => {
     expect(response.yieldToPath).toBe(true);
   });
 
+  it("keeps option value completions active for repeated array arguments", async () => {
+    const response = await resolveCommandCompletionsWithRegistry(
+      {
+        cwd: "/tmp/project",
+        draft: "aws ec2 accept-reserved-instances-exchange-quote --reserved-instance-ids ri-123 ",
+        offset: 0,
+        limit: 12,
+      },
+      registry,
+    );
+
+    expect(response.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "value",
+          label: "ri-123",
+        }),
+        expect.objectContaining({
+          kind: "value",
+          label: "ri-456",
+          nextValue:
+            "aws ec2 accept-reserved-instances-exchange-quote --reserved-instance-ids ri-123 ri-456",
+        }),
+      ]),
+    );
+    expect(response.resolvedCommand).toBe(true);
+    expect(response.yieldToPath).toBe(false);
+  });
+
+  it("keeps explicit value suggestions when an argument also yields to paths", async () => {
+    const response = await resolveCommandCompletionsWithRegistry(
+      {
+        cwd: "/tmp/project",
+        draft: "base64 --input ",
+        offset: 0,
+        limit: 12,
+      },
+      registry,
+    );
+
+    expect(response.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "value",
+          label: "stdin",
+          nextValue: "base64 --input stdin ",
+        }),
+        expect.objectContaining({
+          kind: "value",
+          label: "-",
+          nextValue: "base64 --input - ",
+        }),
+      ]),
+    );
+    expect(response.resolvedCommand).toBe(true);
+    expect(response.yieldToPath).toBe(true);
+  });
+
   it("runs constrained dynamic generators for live values", async () => {
     const response = await resolveCommandCompletionsWithRegistry(
       {
@@ -605,6 +710,37 @@ describe("resolveCommandCompletionsWithRegistry", () => {
         expect.arrayContaining([
           expect.objectContaining({
             label: testCase.expectedLabel,
+          }),
+        ]),
+      );
+      expect(response.resolvedCommand).toBe(true);
+      expect(response.yieldToPath).toBe(false);
+    }
+  });
+
+  it("resolves command completion context after shell separators", async () => {
+    const cases = [
+      "echo ok && git st",
+      "echo ok|git st",
+      "echo ok;git st",
+    ];
+
+    for (const draft of cases) {
+      const response = await resolveCommandCompletionsWithRegistry(
+        {
+          cwd: "/tmp/project",
+          draft,
+          offset: 0,
+          limit: 12,
+        },
+        registry,
+      );
+
+      expect(response.items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "subcommand",
+            label: "status",
           }),
         ]),
       );

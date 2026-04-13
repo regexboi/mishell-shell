@@ -14,6 +14,7 @@ const LOCAL_FIG_BUILD_SEGMENTS = [".fig", "autocomplete", "build"] as const;
 const MAX_CANDIDATES_TO_DESCRIBE = 6;
 const ROOT_COMMAND_NAME_PATTERN = /^[^/\\]+$/;
 const ENV_ASSIGNMENT_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*=.*$/;
+const SHELL_COMMAND_SEPARATORS = ["&&", "||", "|&", "|", ";", "&"] as const;
 const WRAPPER_COMMANDS = new Set(["builtin", "command", "exec", "nohup", "time"]);
 const DYNAMIC_GENERATOR_COMMAND_ALLOWLIST = new Set([
   "bash",
@@ -167,6 +168,11 @@ type ActiveCommandContext = {
   query: string;
   replacementEnd: number;
   replacementStart: number;
+};
+
+type PendingOptionArgument = {
+  argumentIndex: number;
+  option: FigOption;
 };
 
 const publicCommandIndexPromiseCache = new Map<string, Promise<string[]>>();
@@ -573,12 +579,11 @@ async function resolveActiveCommandContext(
   let current = rootSpec;
   const ancestors = [rootSpec];
   let positionalIndex = 0;
-  let pendingArgument: FigArgument | null = null;
+  let pendingOptionArgument: PendingOptionArgument | null = null;
 
   for (const token of tokensToTraverse) {
-    if (pendingArgument) {
-      pendingArgument = null;
-      positionalIndex += 1;
+    if (pendingOptionArgument) {
+      pendingOptionArgument = getNextPendingOptionArgument(pendingOptionArgument);
       continue;
     }
 
@@ -595,7 +600,13 @@ async function resolveActiveCommandContext(
         continue;
       }
 
-      pendingArgument = getOptionArgument(optionMatch);
+      if (getOptionArgument(optionMatch)) {
+        pendingOptionArgument = {
+          argumentIndex: 0,
+          option: optionMatch,
+        };
+      }
+
       continue;
     }
 
@@ -611,12 +622,16 @@ async function resolveActiveCommandContext(
       current = matchedSubcommand;
       ancestors.push(matchedSubcommand);
       positionalIndex = 0;
-      pendingArgument = null;
+      pendingOptionArgument = null;
       continue;
     }
 
     positionalIndex += 1;
   }
+
+  const pendingArgument = pendingOptionArgument
+    ? getOptionArgument(pendingOptionArgument.option, pendingOptionArgument.argumentIndex)
+    : null;
 
   return {
     ancestors,
@@ -646,15 +661,7 @@ async function buildContextualCompletions({
   const activeArgument =
     context.pendingArgument ??
     resolvePositionalArgument(context.current.spec.args, context.positionalIndex);
-
-  if (shouldYieldToPathCompletion(activeArgument)) {
-    return {
-      hasMore: false,
-      items: [],
-      resolvedCommand: true,
-      yieldToPath: true,
-    };
-  }
+  const yieldToPath = shouldYieldToPathCompletion(activeArgument);
 
   const valueCompletions = await buildArgumentValueCompletions({
     argument: activeArgument,
@@ -665,7 +672,19 @@ async function buildContextualCompletions({
   });
 
   if (valueCompletions.items.length > 0) {
-    return valueCompletions;
+    return {
+      ...valueCompletions,
+      yieldToPath,
+    };
+  }
+
+  if (yieldToPath) {
+    return {
+      hasMore: false,
+      items: [],
+      resolvedCommand: true,
+      yieldToPath: true,
+    };
   }
 
   const subcommandCandidates = getSubcommands(context.current.spec)
@@ -1168,12 +1187,51 @@ function getOptions(command: FigCommand) {
   return Array.isArray(command.options) ? command.options : [];
 }
 
-function getOptionArgument(option: FigOption) {
+function getOptionArguments(option: FigOption) {
   if (!option.args) {
+    return [];
+  }
+
+  return Array.isArray(option.args) ? option.args : [option.args];
+}
+
+function getOptionArgument(option: FigOption, argumentIndex = 0) {
+  const args = getOptionArguments(option);
+  const selected = args[argumentIndex] ?? args.at(-1);
+
+  if (!selected) {
     return null;
   }
 
-  return Array.isArray(option.args) ? (option.args[0] ?? null) : option.args;
+  if (selected.isVariadic) {
+    return selected;
+  }
+
+  return args[argumentIndex] ?? null;
+}
+
+function getNextPendingOptionArgument(pendingOptionArgument: PendingOptionArgument) {
+  const currentArgument = getOptionArgument(
+    pendingOptionArgument.option,
+    pendingOptionArgument.argumentIndex,
+  );
+
+  if (!currentArgument) {
+    return null;
+  }
+
+  if (currentArgument.isVariadic) {
+    return pendingOptionArgument;
+  }
+
+  if (!getOptionArgument(pendingOptionArgument.option, pendingOptionArgument.argumentIndex + 1)) {
+    return null;
+  }
+
+  return {
+    argumentIndex: pendingOptionArgument.argumentIndex + 1,
+    option: pendingOptionArgument.option,
+  };
 }
 
 function resolvePositionalArgument(
@@ -1273,6 +1331,28 @@ function parseCompletionDraft(draft: string): ParsedDraft {
       continue;
     }
 
+    const separator = getShellCommandSeparator(draft, index);
+
+    if (separator) {
+      if (tokenStart >= 0) {
+        tokens.push({
+          end: index,
+          start: tokenStart,
+          value: current,
+        });
+        current = "";
+        tokenStart = -1;
+      }
+
+      tokens.push({
+        end: index + separator.length,
+        start: index,
+        value: separator,
+      });
+      index += separator.length - 1;
+      continue;
+    }
+
     if (/\s/.test(character)) {
       if (tokenStart >= 0) {
         tokens.push({
@@ -1310,7 +1390,15 @@ function parseCompletionDraft(draft: string): ParsedDraft {
 }
 
 function getCommandTokenIndex(tokens: CompletionToken[]) {
-  let index = 0;
+  let segmentStart = 0;
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (isCommandSeparatorToken(tokens[index]!.value)) {
+      segmentStart = index + 1;
+    }
+  }
+
+  let index = segmentStart;
 
   while (index < tokens.length && ENV_ASSIGNMENT_PATTERN.test(tokens[index]!.value)) {
     index += 1;
@@ -1319,6 +1407,10 @@ function getCommandTokenIndex(tokens: CompletionToken[]) {
   while (index < tokens.length) {
     const token = tokens[index]!.value;
     const normalized = token.toLowerCase();
+
+    if (isCommandSeparatorToken(token)) {
+      return null;
+    }
 
     if (normalized === "sudo" || normalized === "env" || WRAPPER_COMMANDS.has(normalized)) {
       index = skipWrapperTokens(tokens, index, normalized);
@@ -1340,6 +1432,10 @@ function skipWrapperTokens(
 
   while (index < tokens.length) {
     const value = tokens[index]!.value;
+
+    if (isCommandSeparatorToken(value)) {
+      break;
+    }
 
     if (value === "--") {
       index += 1;
@@ -1364,6 +1460,14 @@ function skipWrapperTokens(
   }
 
   return index;
+}
+
+function getShellCommandSeparator(draft: string, index: number) {
+  return SHELL_COMMAND_SEPARATORS.find((separator) => draft.startsWith(separator, index)) ?? null;
+}
+
+function isCommandSeparatorToken(tokenValue: string) {
+  return SHELL_COMMAND_SEPARATORS.includes(tokenValue as (typeof SHELL_COMMAND_SEPARATORS)[number]);
 }
 
 function wrapperOptionConsumesNextToken(wrapper: string, tokenValue: string) {
