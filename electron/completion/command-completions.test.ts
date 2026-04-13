@@ -23,6 +23,24 @@ const specs = {
       {
         description: "Build an image from a Dockerfile",
         name: "build",
+        options: [
+          {
+            args: {
+              generators: {
+                template: "folders",
+              },
+            },
+            description: "Set the build context",
+            name: "--file-context",
+          },
+          {
+            args: {
+              template: ["filepaths"],
+            },
+            description: "Write the build result to a file",
+            name: ["-o", "--output"],
+          },
+        ],
       },
       {
         description: "Define and run multi-container applications",
@@ -432,6 +450,38 @@ describe("resolveCommandCompletionsWithRegistry", () => {
     expect(response.yieldToPath).toBe(true);
   });
 
+  it("yields to path completion for template arrays imported from specs", async () => {
+    const response = await resolveCommandCompletionsWithRegistry(
+      {
+        cwd: "/tmp/project",
+        draft: "docker build --output ",
+        offset: 0,
+        limit: 12,
+      },
+      registry,
+    );
+
+    expect(response.items).toEqual([]);
+    expect(response.resolvedCommand).toBe(true);
+    expect(response.yieldToPath).toBe(true);
+  });
+
+  it("yields to path completion for generator templates imported from specs", async () => {
+    const response = await resolveCommandCompletionsWithRegistry(
+      {
+        cwd: "/tmp/project",
+        draft: "docker build --file-context ",
+        offset: 0,
+        limit: 12,
+      },
+      registry,
+    );
+
+    expect(response.items).toEqual([]);
+    expect(response.resolvedCommand).toBe(true);
+    expect(response.yieldToPath).toBe(true);
+  });
+
   it("runs constrained dynamic generators for live values", async () => {
     const response = await resolveCommandCompletionsWithRegistry(
       {
@@ -493,22 +543,17 @@ describe("resolveCommandCompletionsWithRegistry", () => {
 });
 
 describe("resolveCommandCompletions", () => {
-  it("loads local .fig specs from the current project tree", async () => {
+  it("loads local inert JSON specs from the current project tree", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mishell-local-spec-"));
     tempDirectories.push(directory);
     const buildDirectory = path.join(directory, ".fig", "autocomplete", "build");
     fs.mkdirSync(buildDirectory, { recursive: true });
     fs.writeFileSync(
-      path.join(buildDirectory, "localcmd.js"),
-      'export default { name: "localcmd", description: "Project-local command spec" };',
+      path.join(buildDirectory, "localcmd.json"),
+      JSON.stringify({ name: "localcmd", description: "Project-local command spec" }),
       "utf8",
     );
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ completions: [] }), {
-        headers: { "Content-Type": "application/json" },
-        status: 200,
-      }),
-    );
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
 
     const response = await resolveCommandCompletions({
       cwd: directory,
@@ -525,6 +570,30 @@ describe("resolveCommandCompletions", () => {
         }),
       ]),
     );
+    expect(response.resolvedCommand).toBe(false);
+    expect(response.yieldToPath).toBe(false);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("ignores legacy executable local specs", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mishell-local-spec-"));
+    tempDirectories.push(directory);
+    const buildDirectory = path.join(directory, ".fig", "autocomplete", "build");
+    fs.mkdirSync(buildDirectory, { recursive: true });
+    fs.writeFileSync(
+      path.join(buildDirectory, "localcmd.js"),
+      'export default { name: "localcmd", description: "Legacy local command spec" };',
+      "utf8",
+    );
+
+    const response = await resolveCommandCompletions({
+      cwd: directory,
+      draft: "localc",
+      offset: 0,
+      limit: 8,
+    });
+
+    expect(response.items).toEqual([]);
     expect(response.resolvedCommand).toBe(false);
     expect(response.yieldToPath).toBe(false);
   });

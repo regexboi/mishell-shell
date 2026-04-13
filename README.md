@@ -17,6 +17,7 @@ Mishell is an Electron desktop shell with a custom editor-first workflow, PTY-ba
 - `pnpm rebuild:native`
 - `pnpm rebuild:node`
 - `./vp dev`
+- `pnpm sync:completion-specs`
 - `./vp check`
 - `./vp test`
 - `./vp build`
@@ -27,6 +28,8 @@ Mishell is an Electron desktop shell with a custom editor-first workflow, PTY-ba
 
 - `./vp dev` rebuilds native modules for Electron before launching the app.
 - `./vp test` rebuilds native modules for the local Node runtime before running Vitest.
+- `pnpm sync:completion-specs` refreshes the vendored command-spec registry documented in [electron/completion/README.md](/Users/mishca/scripts/mishell-shell/electron/completion/README.md).
+- Local completion overrides in `.fig/autocomplete/build` must be JSON specs; executable local Fig `.js` specs are not loaded.
 - `./vp dev` expects port `5173` to be free and fails fast if it is occupied.
 - In packaged builds Mishell starts in the user home directory. In local dev it starts in the current repo cwd.
 - `./vp pack` creates platform installers/artifacts in `release/` with signing auto-discovery disabled for local unsigned builds.

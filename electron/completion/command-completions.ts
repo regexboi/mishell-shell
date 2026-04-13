@@ -8,9 +8,8 @@ import type {
   CommandCompletionRequest,
   CommandCompletionResponse,
 } from "@shared/contracts";
+import bundledPublicSpecs from "./generated/public-specs.generated.json";
 
-const FIG_PUBLIC_SPEC_INDEX_URL = "https://specs.q.us-east-1.amazonaws.com/index.json";
-const FIG_PUBLIC_SPEC_BASE_URL = "https://specs.q.us-east-1.amazonaws.com/";
 const LOCAL_FIG_BUILD_SEGMENTS = [".fig", "autocomplete", "build"] as const;
 const MAX_CANDIDATES_TO_DESCRIBE = 6;
 const ROOT_COMMAND_NAME_PATTERN = /^[^/\\]+$/;
@@ -53,6 +52,7 @@ type FigGenerator = {
   script?:
     | string[]
     | ((tokens: string[], query: string) => string[] | undefined | null);
+  template?: string | string[];
   trigger?: boolean | ((tokens: string[], query: string) => boolean);
 };
 
@@ -61,7 +61,7 @@ type FigArgument = {
   generators?: FigGenerator | FigGenerator[];
   isVariadic?: boolean;
   suggestions?: FigSuggestion[];
-  template?: string;
+  template?: string | string[];
 };
 
 type FigOption = {
@@ -97,7 +97,7 @@ type ExecuteCommand = (input: {
 
 type CommandRegistry = {
   executeCommand?: ExecuteCommand;
-  listCommands: () => Promise<Array<{ name: string; source: CommandCompletionItem["source"] }>>;
+  listCommands: () => Promise<Array<{ name: string; source: "fig-local" | "fig-public" }>>;
   loadSpec: (
     name: string,
   ) => Promise<{
@@ -138,15 +138,15 @@ type ActiveCommandContext = {
 };
 
 const publicCommandIndexPromiseCache = new Map<string, Promise<string[]>>();
-const publicCommandSpecPromiseCache = new Map<
-  string,
-  Promise<{ source: "fig-public"; spec: FigCommand } | null>
->();
 const localCommandIndexPromiseCache = new Map<string, Promise<string[]>>();
 const localCommandSpecPromiseCache = new Map<
   string,
   Promise<{ source: "fig-local"; spec: FigCommand } | null>
 >();
+const bundledPublicSpecRegistry = bundledPublicSpecs as {
+  commands: string[];
+  specs: Record<string, FigCommand>;
+};
 
 export async function resolveCommandCompletions(
   input: CommandCompletionRequest,
@@ -241,10 +241,10 @@ function createCommandRegistry(cwd: string): CommandRegistry {
     listCommands: async () => {
       const [localCommands, publicCommands] = await Promise.all([
         loadLocalCommandIndex(localSpecDirectories),
-        loadPublicCommandIndex(),
+        loadBundledCommandIndex(),
       ]);
 
-      const merged = new Map<string, CommandCompletionItem["source"]>();
+      const merged = new Map<string, "fig-local" | "fig-public">();
 
       for (const name of publicCommands) {
         merged.set(name, "fig-public");
@@ -265,7 +265,7 @@ function createCommandRegistry(cwd: string): CommandRegistry {
         return local;
       }
 
-      return loadPublicSpec(name);
+      return loadBundledSpec(name);
     },
   };
 }
@@ -323,13 +323,13 @@ function scanLocalCommandIndex(specDirectories: string[]) {
     }
 
     for (const entry of entries) {
-      if (entry.isFile() && entry.name.endsWith(".js")) {
-        names.add(entry.name.slice(0, -3));
+      if (entry.isFile() && entry.name.endsWith(".json")) {
+        names.add(entry.name.slice(0, -5));
         continue;
       }
 
       if (entry.isDirectory()) {
-        const indexPath = path.join(directory, entry.name, "index.js");
+        const indexPath = path.join(directory, entry.name, "index.json");
 
         if (fs.existsSync(indexPath)) {
           names.add(entry.name);
@@ -344,31 +344,24 @@ function scanLocalCommandIndex(specDirectories: string[]) {
 }
 
 async function loadPublicCommandIndex() {
-  const cacheKey = FIG_PUBLIC_SPEC_INDEX_URL;
+  const cacheKey = "bundled-public-spec-index";
 
   if (!publicCommandIndexPromiseCache.has(cacheKey)) {
-    publicCommandIndexPromiseCache.set(cacheKey, fetchPublicCommandIndex());
+    publicCommandIndexPromiseCache.set(
+      cacheKey,
+      Promise.resolve(getBundledPublicCommandIndex()),
+    );
   }
 
   return publicCommandIndexPromiseCache.get(cacheKey)!;
 }
 
-async function fetchPublicCommandIndex() {
-  const response = await fetch(FIG_PUBLIC_SPEC_INDEX_URL);
+async function loadBundledCommandIndex() {
+  return loadPublicCommandIndex();
+}
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch command spec index (${response.status})`);
-  }
-
-  const payload = (await response.json()) as {
-    completions?: unknown;
-  };
-
-  if (!Array.isArray(payload.completions)) {
-    return [];
-  }
-
-  return payload.completions
+function getBundledPublicCommandIndex() {
+  return bundledPublicSpecRegistry.commands
     .filter((value): value is string => typeof value === "string")
     .filter((value) => ROOT_COMMAND_NAME_PATTERN.test(value))
     .sort((left, right) => left.localeCompare(right));
@@ -398,53 +391,38 @@ async function importLocalSpec(
       continue;
     }
 
-    const source = fs.readFileSync(filePath, "utf8");
-    const module = await import(
-      `data:text/javascript;charset=utf-8,${encodeURIComponent(source)}`
-    );
+    try {
+      const source = fs.readFileSync(filePath, "utf8");
+      const parsed = JSON.parse(source) as unknown;
 
-    if (isFigCommand(module.default)) {
+      if (!isFigCommand(parsed)) {
+        continue;
+      }
+
       return {
         source: "fig-local",
-        spec: module.default,
+        spec: parsed,
       };
+    } catch {
+      continue;
     }
   }
 
   return null;
 }
 
-async function loadPublicSpec(
+async function loadBundledSpec(
   name: string,
 ): Promise<{ source: "fig-public"; spec: FigCommand } | null> {
-  if (!publicCommandSpecPromiseCache.has(name)) {
-    publicCommandSpecPromiseCache.set(name, fetchPublicSpec(name));
-  }
+  const spec = bundledPublicSpecRegistry.specs[name];
 
-  return publicCommandSpecPromiseCache.get(name)!;
-}
-
-async function fetchPublicSpec(
-  name: string,
-): Promise<{ source: "fig-public"; spec: FigCommand } | null> {
-  const response = await fetch(`${FIG_PUBLIC_SPEC_BASE_URL}${encodeSpecPath(name)}.js`);
-
-  if (!response.ok) {
-    return null;
-  }
-
-  const source = await response.text();
-  const module = await import(
-    `data:text/javascript;charset=utf-8,${encodeURIComponent(source)}`
-  );
-
-  if (!isFigCommand(module.default)) {
+  if (!isFigCommand(spec)) {
     return null;
   }
 
   return {
     source: "fig-public",
-    spec: module.default,
+    spec,
   };
 }
 
@@ -506,7 +484,7 @@ async function resolveRootCommandCompletions({
     hasMore,
     items: pageCandidates.map((candidate) => ({
       description: descriptionByName.get(candidate.name) ?? null,
-      detail: candidate.source === "fig-local" ? "Local spec" : "Public spec",
+      detail: getSpecSourceDetail(candidate.source),
       kind: "command",
       label: candidate.name,
       nextValue: applyCompletionReplacement({
@@ -676,7 +654,7 @@ async function buildContextualCompletions({
       return {
         description: subcommand.description ?? null,
         detail:
-          context.current.source === "fig-local" ? "Local spec" : "Public spec",
+          getSpecSourceDetail(context.current.source),
         insertText: `${label} `,
         kind: "subcommand" as const,
         label,
@@ -706,7 +684,7 @@ async function buildContextualCompletions({
       return {
         description: option.description ?? null,
         detail:
-          context.current.source === "fig-local" ? "Local spec" : "Public spec",
+          getSpecSourceDetail(context.current.source),
         insertText: `${label}${getOptionArgument(option) ? " " : ""}`,
         kind: "option" as const,
         label,
@@ -826,8 +804,7 @@ async function buildArgumentValueCompletions({
     items: pageCandidates.map((candidate) => ({
       description: candidate.description,
       detail:
-        candidate.detail ??
-        (context.current.source === "fig-local" ? "Local spec" : "Public spec"),
+        candidate.detail ?? getSpecSourceDetail(context.current.source),
       kind: "value",
       label: candidate.label,
       nextValue: applyCompletionReplacement({
@@ -1042,11 +1019,17 @@ function deduplicateCandidates(
 }
 
 function shouldYieldToPathCompletion(argument: FigArgument | null) {
-  if (!argument?.template) {
+  if (!argument) {
     return false;
   }
 
-  return argument.template === "filepaths" || argument.template === "folders";
+  if (hasFilesystemTemplate(argument.template)) {
+    return true;
+  }
+
+  return normalizeGenerators(argument.generators).some((generator) =>
+    hasFilesystemTemplate(generator.template),
+  );
 }
 
 function normalizeGenerators(generators: FigArgument["generators"]) {
@@ -1450,13 +1433,13 @@ function matchesAlias(name: string | string[] | undefined, tokenValue: string) {
 
 function getSpecFilePath(directory: string, name: string) {
   const basePath = path.join(directory, ...name.split("/"));
-  const directFile = `${basePath}.js`;
+  const directFile = `${basePath}.json`;
 
   if (fs.existsSync(directFile)) {
     return directFile;
   }
 
-  const indexFile = path.join(basePath, "index.js");
+  const indexFile = path.join(basePath, "index.json");
 
   if (fs.existsSync(indexFile)) {
     return indexFile;
@@ -1465,15 +1448,22 @@ function getSpecFilePath(directory: string, name: string) {
   return null;
 }
 
-function encodeSpecPath(name: string) {
-  return name
-    .split("/")
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
-}
-
 function isFigCommand(value: unknown): value is FigCommand {
   return typeof value === "object" && value !== null;
+}
+
+function getSpecSourceDetail(source: "fig-local" | "fig-public") {
+  return source === "fig-local" ? "Local spec" : "Bundled spec";
+}
+
+function hasFilesystemTemplate(template: string | string[] | undefined) {
+  if (!template) {
+    return false;
+  }
+
+  const values = Array.isArray(template) ? template : [template];
+
+  return values.some((value) => value === "filepaths" || value === "folders");
 }
 
 async function materializeLoadedSpec(

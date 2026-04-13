@@ -217,7 +217,7 @@ Primary bootstrap source for breadth.
 Use:
 
 - `index.json` for discovery
-- `*.js` spec files for command definitions
+- `*.js` spec files as sync-time input for conversion into a Mishell-owned registry
 
 This is the fastest path to broad day-one coverage.
 
@@ -230,6 +230,8 @@ Primary path for:
 - offline or pinned development flows
 
 This avoids inventing a new private-spec ecosystem immediately.
+
+Use inert JSON specs only. Mishell should not execute local spec code at runtime.
 
 ### Tier 3: Mishell-Owned Built-Ins
 
@@ -338,6 +340,7 @@ Success condition:
 
 - read `.fig/autocomplete/build`
 - support team or private specs
+- require inert JSON local specs
 - add provenance display for local vs public specs
 
 Success condition:
@@ -368,7 +371,6 @@ Not part of the first implementation:
 
 - Should Mishell mirror the public CDN into a repo-owned cache artifact, or fetch on demand?
 - How much of upstream generator execution should be supported before introducing a settings gate?
-- Should local `.fig` specs be enabled by default or behind a trust setting?
 - Do we want a visible source label in the UI such as `Public spec`, `Local spec`, or `Live`?
 - Should unsupported upstream behaviors be logged to a diagnostics panel for fast iteration?
 
