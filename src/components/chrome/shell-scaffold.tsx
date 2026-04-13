@@ -298,9 +298,17 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     setCommandCompletionLoadingMore(false);
   });
 
+  const invalidateInlineSuggestionRequests = useEffectEvent(() => {
+    commandCompletionRequestRef.current += 1;
+    autocompleteRequestRef.current += 1;
+    pathCompletionRequestRef.current += 1;
+    historyRecallRequestRef.current += 1;
+  });
+
   const setDraftValue = useEffectEvent(
     (nextValue: string, source: "history" | "system" | "user" = "user") => {
       if (source === "user") {
+        invalidateInlineSuggestionRequests();
         setRecallSession(null);
         clearCommandCompletionState();
         setPathCompletionItems([]);
@@ -1074,10 +1082,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   });
 
   const closeInlineSuggestions = useEffectEvent(() => {
-    commandCompletionRequestRef.current += 1;
-    autocompleteRequestRef.current += 1;
-    pathCompletionRequestRef.current += 1;
-    historyRecallRequestRef.current += 1;
+    invalidateInlineSuggestionRequests();
     setRecallSession(null);
     clearCommandCompletionState();
     setAutocompleteItems([]);

@@ -206,6 +206,36 @@ const specs = {
       },
     ],
   },
+  git: {
+    description: "Distributed version control",
+    name: "git",
+    subcommands: [
+      {
+        description: "Show the working tree status",
+        name: "status",
+      },
+    ],
+  },
+  ls: {
+    description: "List directory contents",
+    name: "ls",
+    options: [
+      {
+        description: "Use a long listing format",
+        name: "-l",
+      },
+    ],
+  },
+  psql: {
+    description: "PostgreSQL interactive terminal",
+    name: "psql",
+    options: [
+      {
+        description: "Echo hidden queries",
+        name: "--echo-hidden",
+      },
+    ],
+  },
 };
 
 const registry = {
@@ -235,8 +265,11 @@ const registry = {
   async listCommands() {
     return [
       { name: "docker", source: "fig-public" as const },
+      { name: "git", source: "fig-public" as const },
+      { name: "ls", source: "fig-public" as const },
       { name: "vite", source: "fig-public" as const },
       { name: "pnpm", source: "fig-public" as const },
+      { name: "psql", source: "fig-public" as const },
       { name: "uv", source: "fig-public" as const },
       { name: "localcmd", source: "fig-local" as const },
     ];
@@ -540,6 +573,45 @@ describe("resolveCommandCompletionsWithRegistry", () => {
     expect(response.resolvedCommand).toBe(true);
     expect(response.yieldToPath).toBe(false);
   });
+
+  it("consumes wrapper option arguments before resolving the wrapped command", async () => {
+    const cases = [
+      {
+        draft: "sudo -u postgres psql ",
+        expectedLabel: "--echo-hidden",
+      },
+      {
+        draft: "env -C /tmp git ",
+        expectedLabel: "status",
+      },
+      {
+        draft: "time -p ls ",
+        expectedLabel: "-l",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const response = await resolveCommandCompletionsWithRegistry(
+        {
+          cwd: "/tmp/project",
+          draft: testCase.draft,
+          offset: 0,
+          limit: 12,
+        },
+        registry,
+      );
+
+      expect(response.items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            label: testCase.expectedLabel,
+          }),
+        ]),
+      );
+      expect(response.resolvedCommand).toBe(true);
+      expect(response.yieldToPath).toBe(false);
+    }
+  });
 });
 
 describe("resolveCommandCompletions", () => {
@@ -595,6 +667,41 @@ describe("resolveCommandCompletions", () => {
 
     expect(response.items).toEqual([]);
     expect(response.resolvedCommand).toBe(false);
+    expect(response.yieldToPath).toBe(false);
+  });
+
+  it("keeps default-registry dynamic generators constrained", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mishell-local-spec-"));
+    tempDirectories.push(directory);
+    const buildDirectory = path.join(directory, ".fig", "autocomplete", "build");
+    fs.mkdirSync(buildDirectory, { recursive: true });
+    fs.writeFileSync(
+      path.join(buildDirectory, "localcmd.json"),
+      JSON.stringify({
+        name: "localcmd",
+        options: [
+          {
+            args: {
+              generators: {
+                script: ["node", "-e", "process.stdout.write('unsafe\\n')"],
+              },
+            },
+            name: "--danger",
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const response = await resolveCommandCompletions({
+      cwd: directory,
+      draft: "localcmd --danger u",
+      offset: 0,
+      limit: 8,
+    });
+
+    expect(response.items).toEqual([]);
+    expect(response.resolvedCommand).toBe(true);
     expect(response.yieldToPath).toBe(false);
   });
 });

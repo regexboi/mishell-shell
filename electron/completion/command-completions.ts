@@ -28,6 +28,38 @@ const DYNAMIC_GENERATOR_COMMAND_ALLOWLIST = new Set([
   "rustup",
   "sh",
 ]);
+const WRAPPER_OPTIONS_WITH_ARGUMENT = new Map<string, Set<string>>([
+  [
+    "env",
+    new Set(["-c", "-s", "-u", "--chdir", "--split-string", "--unset"]),
+  ],
+  [
+    "exec",
+    new Set(["-a"]),
+  ],
+  [
+    "sudo",
+    new Set([
+      "-c",
+      "-g",
+      "-h",
+      "-p",
+      "-r",
+      "-t",
+      "-u",
+      "--group",
+      "--host",
+      "--prompt",
+      "--role",
+      "--type",
+      "--user",
+    ]),
+  ],
+  [
+    "time",
+    new Set(["-f", "-o", "--format", "--output"]),
+  ],
+]);
 
 type FigSuggestion =
   | string
@@ -237,7 +269,6 @@ function createCommandRegistry(cwd: string): CommandRegistry {
   const localSpecDirectories = getLocalSpecDirectories(cwd);
 
   return {
-    executeCommand: createDefaultExecuteCommand(),
     listCommands: async () => {
       const [localCommands, publicCommands] = await Promise.all([
         loadLocalCommandIndex(localSpecDirectories),
@@ -1289,48 +1320,8 @@ function getCommandTokenIndex(tokens: CompletionToken[]) {
     const token = tokens[index]!.value;
     const normalized = token.toLowerCase();
 
-    if (normalized === "sudo") {
-      index += 1;
-
-      while (
-        index < tokens.length &&
-        tokens[index]!.value !== "--" &&
-        tokens[index]!.value.startsWith("-")
-      ) {
-        index += 1;
-      }
-
-      if (tokens[index]?.value === "--") {
-        index += 1;
-      }
-
-      continue;
-    }
-
-    if (normalized === "env") {
-      index += 1;
-
-      while (index < tokens.length) {
-        const value = tokens[index]!.value;
-
-        if (value === "--") {
-          index += 1;
-          break;
-        }
-
-        if (value.startsWith("-") || ENV_ASSIGNMENT_PATTERN.test(value)) {
-          index += 1;
-          continue;
-        }
-
-        break;
-      }
-
-      continue;
-    }
-
-    if (WRAPPER_COMMANDS.has(normalized)) {
-      index += 1;
+    if (normalized === "sudo" || normalized === "env" || WRAPPER_COMMANDS.has(normalized)) {
+      index = skipWrapperTokens(tokens, index, normalized);
       continue;
     }
 
@@ -1338,6 +1329,67 @@ function getCommandTokenIndex(tokens: CompletionToken[]) {
   }
 
   return null;
+}
+
+function skipWrapperTokens(
+  tokens: CompletionToken[],
+  startIndex: number,
+  wrapper: string,
+) {
+  let index = startIndex + 1;
+
+  while (index < tokens.length) {
+    const value = tokens[index]!.value;
+
+    if (value === "--") {
+      index += 1;
+      break;
+    }
+
+    if (wrapper === "env" && ENV_ASSIGNMENT_PATTERN.test(value)) {
+      index += 1;
+      continue;
+    }
+
+    if (!value.startsWith("-") || value === "-") {
+      break;
+    }
+
+    const consumesArgument = wrapperOptionConsumesNextToken(wrapper, value);
+    index += 1;
+
+    if (consumesArgument && index < tokens.length && tokens[index]!.value !== "--") {
+      index += 1;
+    }
+  }
+
+  return index;
+}
+
+function wrapperOptionConsumesNextToken(wrapper: string, tokenValue: string) {
+  const options = WRAPPER_OPTIONS_WITH_ARGUMENT.get(wrapper);
+
+  if (!options) {
+    return false;
+  }
+
+  const normalized = tokenValue.toLowerCase();
+
+  for (const option of options) {
+    if (normalized === option) {
+      return true;
+    }
+
+    if (normalized.startsWith(`${option}=`)) {
+      return false;
+    }
+
+    if (option.startsWith("-") && !option.startsWith("--") && normalized.startsWith(option)) {
+      return false;
+    }
+  }
+
+  return false;
 }
 
 function fuzzyScore(candidate: string, query: string) {
