@@ -165,10 +165,12 @@ function collectBindings(sourceFile) {
       continue;
     }
 
-    if (
-      (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) &&
-      statement.name
-    ) {
+    if (ts.isFunctionDeclaration(statement) && statement.name) {
+      bindings.set(statement.name.text, statement);
+      continue;
+    }
+
+    if (ts.isClassDeclaration(statement) && statement.name) {
       bindings.set(statement.name.text, UNSUPPORTED);
     }
   }
@@ -405,12 +407,131 @@ function evaluateExpression(node, context) {
     );
   }
 
+  if (ts.isCallExpression(node)) {
+    return evaluateCallExpression(node, context);
+  }
+
+  return UNSUPPORTED;
+}
+
+function evaluateCallExpression(node, context) {
+  if (node.typeArguments?.length || node.arguments.some((argument) => ts.isSpreadElement(argument))) {
+    return UNSUPPORTED;
+  }
+
+  const callable = resolveCallable(node.expression, context);
+
+  if (!callable) {
+    return UNSUPPORTED;
+  }
+
+  const args = node.arguments.map((argument) => evaluateExpression(argument, context));
+
+  if (args.some((argument) => argument === UNSUPPORTED)) {
+    return UNSUPPORTED;
+  }
+
+  return invokeCallable(callable, args, context);
+}
+
+function resolveCallable(node, context, seen = new Set()) {
+  if (!node) {
+    return null;
+  }
+
+  if (ts.isParenthesizedExpression(node)) {
+    return resolveCallable(node.expression, context, seen);
+  }
+
+  if (ts.isArrowFunction(node) || ts.isFunctionExpression(node) || ts.isFunctionDeclaration(node)) {
+    return node;
+  }
+
+  if (!ts.isIdentifier(node) || seen.has(node.text)) {
+    return null;
+  }
+
+  seen.add(node.text);
+
+  if (!context.bindings.has(node.text)) {
+    return null;
+  }
+
+  const binding = context.bindings.get(node.text);
+
+  if (
+    ts.isArrowFunction(binding) ||
+    ts.isFunctionExpression(binding) ||
+    ts.isFunctionDeclaration(binding)
+  ) {
+    return binding;
+  }
+
+  return resolveCallable(binding, context, seen);
+}
+
+function invokeCallable(node, args, parentContext) {
+  const parameters = node.parameters;
+
+  if (
+    parameters.some(
+      (parameter) =>
+        parameter.dotDotDotToken ||
+        !ts.isIdentifier(parameter.name) ||
+        parameter.questionToken,
+    )
+  ) {
+    return UNSUPPORTED;
+  }
+
+  const context = {
+    bindings: parentContext.bindings,
+    cache: new Map(),
+    values: new Map(parentContext.values ?? []),
+  };
+
+  for (const [index, parameter] of parameters.entries()) {
+    const name = parameter.name.text;
+    const provided = index < args.length;
+    const value = provided
+      ? args[index]
+      : parameter.initializer
+        ? evaluateExpression(parameter.initializer, context)
+        : undefined;
+
+    if (value === UNSUPPORTED) {
+      return UNSUPPORTED;
+    }
+
+    context.values.set(name, value);
+  }
+
+  if (ts.isArrowFunction(node) && !ts.isBlock(node.body)) {
+    return evaluateExpression(node.body, context);
+  }
+
+  if (ts.isBlock(node.body)) {
+    const bodyStatements = node.body.statements.filter(
+      (statement) => !ts.isEmptyStatement(statement),
+    );
+
+    if (bodyStatements.length !== 1 || !ts.isReturnStatement(bodyStatements[0])) {
+      return UNSUPPORTED;
+    }
+
+    return evaluateExpression(bodyStatements[0].expression, context);
+  }
+
   return UNSUPPORTED;
 }
 
 function resolveBinding(name, context) {
   if (name === "undefined") {
     return undefined;
+  }
+
+  if (context.values?.has(name)) {
+    return context.values.get(name);
   }
 
   if (!context.bindings.has(name)) {

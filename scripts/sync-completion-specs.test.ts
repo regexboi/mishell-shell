@@ -43,4 +43,26 @@ describe("extractStaticSpecFromSource", () => {
       name: "git",
     });
   });
+
+  it("resolves default exports produced by local factory calls", () => {
+    const spec = extractStaticSpecFromSource(`
+      const createSpec = (includeBuild = true) => ({
+        name: "cargo",
+        subcommands: includeBuild ? [{ name: "build" }] : [],
+      });
+
+      const spec = createSpec();
+
+      export { spec as default };
+    `);
+
+    expect(spec).toEqual({
+      name: "cargo",
+      subcommands: [
+        {
+          name: "build",
+        },
+      ],
+    });
+  });
 });

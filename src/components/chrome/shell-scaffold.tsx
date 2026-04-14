@@ -298,6 +298,42 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     setCommandCompletionLoadingMore(false);
   });
 
+  const mergeCommandCompletionItems = useEffectEvent(
+    (
+      currentItems: CommandCompletionItem[],
+      nextItems: CommandCompletionItem[],
+    ): CommandCompletionItem[] => {
+      const merged = new Map<string, CommandCompletionItem>();
+
+      for (const item of currentItems) {
+        merged.set(
+          `${item.kind}:${item.label}:${item.nextValue}:${item.source}`,
+          item,
+        );
+      }
+
+      for (const item of nextItems) {
+        merged.set(
+          `${item.kind}:${item.label}:${item.nextValue}:${item.source}`,
+          item,
+        );
+      }
+
+      return [...merged.values()];
+    },
+  );
+
+  const mapPathCompletionToCommandCompletion = useEffectEvent(
+    (item: PathCompletionItem): CommandCompletionItem => ({
+      nextValue: item.nextValue,
+      label: item.label,
+      description: item.isDirectory ? "Directory" : "Path",
+      detail: item.path,
+      kind: "value",
+      source: "preview",
+    }),
+  );
+
   const invalidateInlineSuggestionRequests = useEffectEvent(() => {
     commandCompletionRequestRef.current += 1;
     autocompleteRequestRef.current += 1;
@@ -1018,25 +1054,9 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         return;
       }
 
-      setCommandCompletionItems((currentItems) => {
-        const merged = new Map<string, CommandCompletionItem>();
-
-        for (const item of currentItems) {
-          merged.set(
-            `${item.kind}:${item.label}:${item.nextValue}:${item.source}`,
-            item,
-          );
-        }
-
-        for (const item of response.items) {
-          merged.set(
-            `${item.kind}:${item.label}:${item.nextValue}:${item.source}`,
-            item,
-          );
-        }
-
-        return [...merged.values()];
-      });
+      setCommandCompletionItems((currentItems) =>
+        mergeCommandCompletionItems(currentItems, response.items),
+      );
       setCommandCompletionHasMore(response.hasMore);
       setCommandCompletionLoadingMore(false);
     } catch {
@@ -1048,28 +1068,42 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     }
   });
 
-  const requestPathCompletions = useEffectEvent(async () => {
-    const requestId = pathCompletionRequestRef.current + 1;
-    pathCompletionRequestRef.current = requestId;
+  const requestPathCompletions = useEffectEvent(
+    async ({ mergeIntoCommandCompletions = false } = {}) => {
+      const requestId = pathCompletionRequestRef.current + 1;
+      pathCompletionRequestRef.current = requestId;
 
-    const response = await api.app.getPathCompletions({
-      draft,
-      cwd: shellContext.cwd,
-      limit: 24,
-    });
+      const response = await api.app.getPathCompletions({
+        draft,
+        cwd: shellContext.cwd,
+        limit: 24,
+      });
 
-    if (pathCompletionRequestRef.current !== requestId) {
-      return false;
-    }
+      if (pathCompletionRequestRef.current !== requestId) {
+        return false;
+      }
 
-    startTransition(() => {
-      clearCommandCompletionState();
-      setPathCompletionItems(response.items);
-      setAutocompleteIndex(null);
-    });
+      startTransition(() => {
+        if (mergeIntoCommandCompletions) {
+          setCommandCompletionItems((currentItems) =>
+            mergeCommandCompletionItems(
+              currentItems,
+              response.items.map((item) =>
+                mapPathCompletionToCommandCompletion(item),
+              ),
+            ),
+          );
+          setPathCompletionItems([]);
+        } else {
+          clearCommandCompletionState();
+          setPathCompletionItems(response.items);
+        }
+        setAutocompleteIndex(null);
+      });
 
-    return response.items.length > 0;
-  });
+      return response.items.length > 0;
+    },
+  );
 
   const clearEditorDraft = useEffectEvent(() => {
     setRecallSession(null);
@@ -1411,7 +1445,9 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
 
         void requestCommandCompletions().then((commandCompletionResult) => {
           if (commandCompletionResult.yieldToPath) {
-            void requestPathCompletions();
+            void requestPathCompletions({
+              mergeIntoCommandCompletions: commandCompletionResult.found,
+            });
             return;
           }
 
