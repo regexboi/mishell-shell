@@ -53,6 +53,23 @@
   --grid-line: rgba(255, 210, 140, 0.032);
 }
 
+:root[data-mishell-theme="dark-knight"] {
+  --bg: #000000;
+  --panel: rgba(2, 4, 8, 0.94);
+  --panel-muted: rgba(0, 2, 6, 0.92);
+  --panel-strong: rgba(6, 10, 18, 0.97);
+  --border: rgba(56, 96, 168, 0.22);
+  --border-strong: rgba(72, 120, 200, 0.38);
+  --accent: #4a7ec4;
+  --accent-dim: rgba(58, 110, 190, 0.28);
+  --text-primary: #e4e8f0;
+  --text-secondary: rgba(180, 195, 220, 0.72);
+  --text-muted: rgba(110, 130, 165, 0.48);
+  --glow-primary: rgba(30, 70, 140, 0.06);
+  --glow-secondary: rgba(12, 28, 64, 0.1);
+  --grid-line: rgba(48, 88, 160, 0.045);
+}
+
 @theme inline {
   --font-display: "Space Grotesk", "Avenir Next", sans-serif;
   --font-sans: "Space Grotesk", "Avenir Next", sans-serif;
@@ -79,6 +96,26 @@
     font-family: var(--font-sans);
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
+  }
+
+  :root[data-mishell-surface="plain"] body {
+    background: var(--bg);
+  }
+
+  :root[data-mishell-surface="depth"] body {
+    background:
+      radial-gradient(
+        ellipse 120% 70% at 50% -15%,
+        color-mix(in srgb, var(--glow-primary) 55%, transparent),
+        transparent 52%
+      ),
+      radial-gradient(
+        circle at 100% 100%,
+        color-mix(in srgb, var(--glow-secondary) 40%, transparent),
+        transparent 38%
+      ),
+      linear-gradient(180deg, color-mix(in srgb, var(--bg) 88%, #101018), var(--bg)),
+      var(--bg);
   }
 
   button,
@@ -120,5 +157,32 @@
   .mishell-overlay-scroll:hover::-webkit-scrollbar-thumb,
   .mishell-overlay-scroll:focus-within::-webkit-scrollbar-thumb {
     background: color-mix(in srgb, var(--accent) 52%, transparent);
+  }
+
+  .mishell-theme-alpha-range {
+    height: 6px;
+    -webkit-appearance: none;
+    appearance: none;
+    border-radius: 9999px;
+    background: color-mix(in srgb, var(--border) 70%, transparent);
+  }
+
+  .mishell-theme-alpha-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    margin-top: -5px;
+    border-radius: 9999px;
+    border: 1px solid color-mix(in srgb, var(--accent) 70%, var(--border));
+    background: var(--accent);
+  }
+
+  .mishell-theme-alpha-range::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 9999px;
+    border: 1px solid color-mix(in srgb, var(--accent) 70%, var(--border));
+    background: var(--accent);
   }
 }

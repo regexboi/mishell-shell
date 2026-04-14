@@ -5,6 +5,7 @@ import {
   useEffect,
   useEffectEvent,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -16,7 +17,6 @@ import {
   FolderTree,
   GitBranch,
   Search,
-  Settings,
   Square,
   Timer,
   TriangleAlert,
@@ -41,10 +41,20 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { getMishellApi } from "@/lib/mishell-api";
+import {
+  PRESET_UI_VARS,
+  UI_THEME_VAR_KEYS,
+  colorsLooselyEqual,
+  cssColorToHex8,
+  loadThemeCustomization,
+  type MishellSurfaceId,
+  type MishellThemeId,
+  type MishellUiColorVar,
+  saveThemeCustomization,
+} from "@/lib/mishell-ui-theme";
 import { shouldRequestPathCompletions } from "@/lib/path-completion";
 import { cn } from "@/lib/utils";
 
@@ -52,8 +62,7 @@ import {
   TerminalModeSurface,
   type TerminalModeSurfaceController,
 } from "./terminal-mode-surface";
-
-type MishellThemeId = "ultraviolet" | "phosphor" | "amber";
+import { ThemeSettingsDialog } from "./theme-settings-dialog";
 
 type ThemeOption = {
   id: MishellThemeId;
@@ -163,6 +172,32 @@ const themeOptions: ThemeOption[] = [
       yellow: "#ffd166",
     },
   },
+  {
+    id: "dark-knight",
+    label: "Dark Knight",
+    terminalTheme: {
+      background: "#000000",
+      black: "#030508",
+      blue: "#5b8cff",
+      brightBlack: "#3d4a5c",
+      brightBlue: "#8cb4ff",
+      brightCyan: "#7ed8f0",
+      brightGreen: "#7aab8a",
+      brightMagenta: "#9aa0d8",
+      brightRed: "#c87878",
+      brightWhite: "#e4eaf5",
+      brightYellow: "#c4b878",
+      cursor: "#6eb0ff",
+      cyan: "#4a9ec4",
+      foreground: "#c5cee0",
+      green: "#5a9070",
+      magenta: "#7a82b8",
+      red: "#a85858",
+      selectionBackground: "#152a48",
+      white: "#a8b4c8",
+      yellow: "#a89868",
+    },
+  },
 ];
 
 const defaultTheme = themeOptions[0];
@@ -233,6 +268,12 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
       return defaultTheme.id;
     }
   });
+  const [surfaceId, setSurfaceId] = useState<MishellSurfaceId>(() => {
+    return loadThemeCustomization().surface;
+  });
+  const [colorOverrides, setColorOverrides] = useState<
+    Partial<Record<MishellUiColorVar, string>>
+  >(() => loadThemeCustomization().colors);
   const deferredDraft = useDeferredValue(draft);
   const deferredHistoryQuery = useDeferredValue(historyQuery);
   const isBrowserPreview = bootstrap.platform === "browser-preview";
@@ -269,6 +310,48 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     recallSession === null ? null : recallSession.items[recallSession.index] ?? null;
   const activeTheme =
     themeOptions.find((theme) => theme.id === themeId) ?? defaultTheme;
+
+  const mergedUiVars = useMemo(
+    () => ({ ...PRESET_UI_VARS[themeId], ...colorOverrides }),
+    [themeId, colorOverrides],
+  );
+
+  const activeTerminalTheme = useMemo(() => {
+    const base = activeTheme.terminalTheme;
+    if (Object.keys(colorOverrides).length === 0) {
+      return base;
+    }
+
+    return {
+      ...base,
+      background: cssColorToHex8(mergedUiVars.bg),
+      foreground: cssColorToHex8(mergedUiVars["text-primary"]),
+      cursor: cssColorToHex8(mergedUiVars.accent),
+      selectionBackground: cssColorToHex8(mergedUiVars["accent-dim"]),
+    };
+  }, [activeTheme, colorOverrides, mergedUiVars]);
+
+  useLayoutEffect(() => {
+    document.documentElement.dataset.mishellSurface = surfaceId;
+  }, [surfaceId]);
+
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    for (const key of UI_THEME_VAR_KEYS) {
+      root.style.removeProperty(`--${key}`);
+    }
+
+    for (const [rawKey, value] of Object.entries(colorOverrides)) {
+      const key = rawKey as MishellUiColorVar;
+      if (value && (UI_THEME_VAR_KEYS as readonly string[]).includes(key)) {
+        root.style.setProperty(`--${key}`, value);
+      }
+    }
+  }, [colorOverrides, themeId]);
+
+  useEffect(() => {
+    saveThemeCustomization({ colors: colorOverrides, surface: surfaceId });
+  }, [colorOverrides, surfaceId]);
 
   useEffect(() => {
     document.documentElement.dataset.mishellTheme = themeId;
@@ -1554,10 +1637,19 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     WebkitAppRegion: "no-drag",
   } as CSSProperties;
 
+  const showAmbientGlow =
+    surfaceId === "studio" || surfaceId === "aurora" || surfaceId === "depth";
+  const showTechGrid =
+    surfaceId === "studio" || surfaceId === "lattice" || surfaceId === "depth";
+
   return (
     <div className="relative flex h-dvh max-h-dvh flex-col overflow-hidden bg-[color:var(--bg)] text-[color:var(--text-primary)]">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,var(--glow-primary),transparent_30%),radial-gradient(circle_at_bottom_right,var(--glow-secondary),transparent_34%)]" />
-      <div className="pointer-events-none absolute inset-0 opacity-40 [background-image:linear-gradient(var(--grid-line)_1px,transparent_1px),linear-gradient(90deg,var(--grid-line)_1px,transparent_1px)] [background-size:32px_32px]" />
+      {showAmbientGlow ? (
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,var(--glow-primary),transparent_30%),radial-gradient(circle_at_bottom_right,var(--glow-secondary),transparent_34%)]" />
+      ) : null}
+      {showTechGrid ? (
+        <div className="pointer-events-none absolute inset-0 opacity-40 [background-image:linear-gradient(var(--grid-line)_1px,transparent_1px),linear-gradient(90deg,var(--grid-line)_1px,transparent_1px)] [background-size:32px_32px]" />
+      ) : null}
       <div className="relative flex min-h-0 w-full flex-1 flex-col">
         <div
           className={cn(
@@ -1566,56 +1658,35 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
           )}
           style={titleBarStyle}
         >
-          <Dialog>
-            <DialogTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-7 w-7 shrink-0 px-0 text-[color:var(--text-muted)] hover:text-[color:var(--accent)]"
-                style={titleBarControlStyle}
-                aria-label="Settings"
-              >
-                <Settings className="h-4 w-4" strokeWidth={1.75} />
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="w-[min(92vw,272px)] gap-0 p-0">
-              <DialogHeader className="border-0 px-5 pb-0 pt-5">
-                <DialogTitle className="font-mono text-[10px] font-medium uppercase tracking-[0.22em] text-[color:var(--text-muted)]">
-                  Theme
-                </DialogTitle>
-                <DialogDescription className="sr-only">
-                  Choose a color theme for Mishell.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="flex flex-col gap-1 px-3 pb-5 pt-4">
-                {themeOptions.map((theme) => (
-                  <button
-                    key={theme.id}
-                    type="button"
-                    onClick={() => {
-                      setThemeId(theme.id);
-                    }}
-                    className={cn(
-                      "flex items-center gap-3 border px-3 py-2.5 text-left transition-colors",
-                      theme.id === activeTheme.id
-                        ? "border-[color:var(--accent)] bg-[color:color-mix(in_srgb,var(--accent)_10%,transparent)]"
-                        : "border-[color:var(--border)] bg-transparent hover:border-[color:var(--border-strong)]",
-                    )}
-                  >
-                    <span
-                      className="h-3.5 w-3.5 shrink-0 border border-[color:var(--border-strong)]"
-                      style={{ background: theme.terminalTheme.magenta }}
-                      aria-hidden
-                    />
-                    <span className="font-mono text-xs uppercase tracking-[0.14em] text-[color:var(--text-primary)]">
-                      {theme.label}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </DialogContent>
-          </Dialog>
+          <ThemeSettingsDialog
+            themeId={themeId}
+            themeOptions={themeOptions}
+            surfaceId={surfaceId}
+            colorOverrides={colorOverrides}
+            triggerStyle={titleBarControlStyle}
+            onSelectPreset={(nextId) => {
+              setThemeId(nextId);
+              setColorOverrides({});
+            }}
+            onSurfaceChange={(nextSurface) => {
+              setSurfaceId(nextSurface);
+            }}
+            onColorChange={(token, value) => {
+              setColorOverrides((previous) => {
+                const next = { ...previous };
+                const presetValue = PRESET_UI_VARS[themeId][token];
+                if (colorsLooselyEqual(value, presetValue)) {
+                  delete next[token];
+                } else {
+                  next[token] = value;
+                }
+                return next;
+              });
+            }}
+            onResetColors={() => {
+              setColorOverrides({});
+            }}
+          />
           <div className="min-h-0 min-w-0 flex-1" aria-hidden />
         </div>
 
@@ -1641,7 +1712,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                   onInput={handleTerminalInput}
                   onReady={handleTerminalReady}
                   onResize={handleTerminalResize}
-                  theme={activeTheme.terminalTheme}
+                  theme={activeTerminalTheme}
                 />
               </section>
             ) : (
@@ -1702,7 +1773,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                 </section>
 
                 <section className="shrink-0">
-                  <div className="border border-[color:var(--border-strong)] bg-[linear-gradient(180deg,rgba(18,18,25,0.82),rgba(10,10,16,0.96))]">
+                  <div className="border border-[color:var(--border-strong)] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--panel-strong)_72%,var(--bg)),color-mix(in_srgb,var(--panel-muted)_85%,var(--bg)))]">
                     <ShellHeader
                       shellContext={shellContext}
                       latestExecution={latestExecution}
