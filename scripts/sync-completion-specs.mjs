@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import ts from "typescript";
 
@@ -12,8 +13,11 @@ const ROOT_COMMAND_NAME_PATTERN = /^[^/\\]+$/;
 const CONCURRENCY = 24;
 const UNSUPPORTED = Symbol("unsupported");
 const IN_PROGRESS = Symbol("in-progress");
+const UNSUPPORTED_PROPERTIES = Symbol("unsupported-properties");
 
-await main();
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main();
+}
 
 async function main() {
   const indexResponse = await fetch(FIG_PUBLIC_SPEC_INDEX_URL);
@@ -122,7 +126,7 @@ async function mapWithConcurrency(items, concurrency, mapper) {
   return results;
 }
 
-function extractStaticSpecFromSource(source) {
+export function extractStaticSpecFromSource(source) {
   const sourceFile = ts.createSourceFile(
     "fig-spec.js",
     source,
@@ -276,6 +280,8 @@ function evaluateExpression(node, context) {
 
         if (resolved !== UNSUPPORTED) {
           value[property.name.text] = resolved;
+        } else {
+          markUnsupportedProperty(value, property.name.text);
         }
 
         continue;
@@ -295,6 +301,8 @@ function evaluateExpression(node, context) {
 
       if (resolved !== UNSUPPORTED) {
         value[key] = resolved;
+      } else {
+        markUnsupportedProperty(value, key);
       }
     }
 
@@ -621,6 +629,19 @@ function sanitizeGenerator(value) {
     return null;
   }
 
+  const unsupportedProperties = new Set(getUnsupportedProperties(value));
+
+  // These fields are executable/runtime behavior. If we couldn't serialize any of them
+  // faithfully, keeping the remainder would change completion semantics.
+  if (
+    unsupportedProperties.has("custom") ||
+    unsupportedProperties.has("postProcess") ||
+    unsupportedProperties.has("script") ||
+    unsupportedProperties.has("trigger")
+  ) {
+    return null;
+  }
+
   const generator = {};
   const script = sanitizeStringArray(value.script);
   const template = sanitizeTemplate(value.template);
@@ -735,6 +756,30 @@ function sanitizeString(value) {
 
 function sanitizeBoolean(value) {
   return typeof value === "boolean" ? value : undefined;
+}
+
+function markUnsupportedProperty(target, key) {
+  const existing = target[UNSUPPORTED_PROPERTIES];
+
+  if (Array.isArray(existing)) {
+    if (!existing.includes(key)) {
+      existing.push(key);
+    }
+
+    return;
+  }
+
+  target[UNSUPPORTED_PROPERTIES] = [key];
+}
+
+function getUnsupportedProperties(value) {
+  const unsupported = value[UNSUPPORTED_PROPERTIES];
+
+  if (!Array.isArray(unsupported)) {
+    return [];
+  }
+
+  return unsupported.filter((entry) => typeof entry === "string");
 }
 
 function isRecord(value) {

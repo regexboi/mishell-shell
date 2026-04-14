@@ -187,6 +187,7 @@ const bundledPublicSpecRegistry = bundledPublicSpecs as {
   commands: string[];
   specs: Record<string, FigCommand>;
 };
+let bundledGeneratorCommandAllowlist: Set<string> | null = null;
 
 export async function resolveCommandCompletions(
   input: CommandCompletionRequest,
@@ -547,10 +548,12 @@ async function resolveActiveCommandContext(
   draftLength: number,
 ): Promise<ActiveCommandContext | null> {
   const commandToken = parsedDraft.tokens[commandTokenIndex];
+  const loadedRootSpec = await registry.loadSpec(commandToken.value);
   const executeCommand =
-    registry.executeCommand ?? createGeneratorExecutor(commandToken.value, cwd);
+    registry.executeCommand ??
+    createGeneratorExecutor(commandToken.value, cwd, loadedRootSpec?.source ?? null);
   const rootSpec = await materializeLoadedSpec(
-    await registry.loadSpec(commandToken.value),
+    loadedRootSpec,
     parsedDraft.tokens
       .slice(commandTokenIndex)
       .map((token) => token.value)
@@ -1111,14 +1114,15 @@ function createDefaultExecuteCommand(): ExecuteCommand {
     });
 }
 
-function createGeneratorExecutor(rootCommand: string, cwd: string): ExecuteCommand {
+function createGeneratorExecutor(
+  rootCommand: string,
+  cwd: string,
+  rootSource: "fig-local" | "fig-public" | null,
+): ExecuteCommand {
   const execute = createDefaultExecuteCommand();
 
   return async ({ args = [], command, cwd: targetCwd = cwd }) => {
-    if (
-      command !== rootCommand &&
-      !DYNAMIC_GENERATOR_COMMAND_ALLOWLIST.has(command)
-    ) {
+    if (!isGeneratorCommandAllowed(command, rootCommand, rootSource)) {
       return {
         exitCode: 1,
         stderr: `Generator command ${command} is not allowed`,
@@ -1132,6 +1136,60 @@ function createGeneratorExecutor(rootCommand: string, cwd: string): ExecuteComma
       cwd: targetCwd,
     });
   };
+}
+
+function isGeneratorCommandAllowed(
+  command: string,
+  rootCommand: string,
+  rootSource: "fig-local" | "fig-public" | null,
+  bundledCommands = getBundledGeneratorCommandAllowlist(),
+) {
+  if (command === rootCommand || DYNAMIC_GENERATOR_COMMAND_ALLOWLIST.has(command)) {
+    return true;
+  }
+
+  return rootSource === "fig-public" && bundledCommands.has(command);
+}
+
+function getBundledGeneratorCommandAllowlist() {
+  if (bundledGeneratorCommandAllowlist) {
+    return bundledGeneratorCommandAllowlist;
+  }
+
+  const commands = new Set<string>();
+
+  collectGeneratorCommands(bundledPublicSpecRegistry.specs, commands);
+  bundledGeneratorCommandAllowlist = commands;
+
+  return bundledGeneratorCommandAllowlist;
+}
+
+function collectGeneratorCommands(value: unknown, commands: Set<string>) {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectGeneratorCommands(entry, commands);
+    }
+
+    return;
+  }
+
+  if (!isRecord(value)) {
+    return;
+  }
+
+  const script = value.script;
+
+  if (
+    Array.isArray(script) &&
+    script.length > 0 &&
+    typeof script[0] === "string"
+  ) {
+    commands.add(script[0]);
+  }
+
+  for (const nested of Object.values(value)) {
+    collectGeneratorCommands(nested, commands);
+  }
 }
 
 function deduplicateCandidates(
@@ -1733,6 +1791,10 @@ function getSpecFilePath(directory: string, name: string) {
   return null;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function isFigCommand(value: unknown): value is FigCommand {
   return typeof value === "object" && value !== null;
 }
@@ -1750,6 +1812,10 @@ function hasFilesystemTemplate(template: string | string[] | undefined) {
 
   return values.some((value) => value === "filepaths" || value === "folders");
 }
+
+export const __testOnly = {
+  isGeneratorCommandAllowed,
+};
 
 async function materializeLoadedSpec(
   loaded: {

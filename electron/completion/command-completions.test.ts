@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  __testOnly,
   resolveCommandCompletions,
   resolveCommandCompletionsWithRegistry,
 } from "./command-completions";
@@ -785,6 +786,20 @@ describe("resolveCommandCompletionsWithRegistry", () => {
       expect(response.resolvedCommand).toBe(true);
       expect(response.yieldToPath).toBe(false);
     }
+  });
+});
+
+describe("generator command allowlist", () => {
+  it("allows bundled helper binaries for bundled specs without widening local specs", () => {
+    expect(
+      __testOnly.isGeneratorCommandAllowed("gh", "black", "fig-public", new Set(["gh"])),
+    ).toBe(true);
+    expect(
+      __testOnly.isGeneratorCommandAllowed("gh", "black", "fig-local", new Set(["gh"])),
+    ).toBe(false);
+    expect(
+      __testOnly.isGeneratorCommandAllowed("black", "black", "fig-local", new Set(["gh"])),
+    ).toBe(true);
   });
 });
 
