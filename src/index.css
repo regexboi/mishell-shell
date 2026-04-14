@@ -1,5 +1,59 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: "JetBrains Mono NF";
+  src: url("./assets/fonts/JetBrainsMonoNerdFontMono-Regular.woff2")
+    format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono NF";
+  src: url("./assets/fonts/JetBrainsMonoNerdFontMono-Italic.woff2")
+    format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono NF";
+  src: url("./assets/fonts/JetBrainsMonoNerdFontMono-Regular.woff2")
+    format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono NF";
+  src: url("./assets/fonts/JetBrainsMonoNerdFontMono-Italic.woff2")
+    format("woff2");
+  font-weight: 500;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono NF";
+  src: url("./assets/fonts/JetBrainsMonoNerdFontMono-Bold.woff2")
+    format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono NF";
+  src: url("./assets/fonts/JetBrainsMonoNerdFontMono-BoldItalic.woff2")
+    format("woff2");
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
+
 :root,
 :root[data-mishell-theme="ultraviolet"] {
   color-scheme: dark;
@@ -71,9 +125,15 @@
 }
 
 @theme inline {
-  --font-display: "Space Grotesk", "Avenir Next", sans-serif;
-  --font-sans: "Space Grotesk", "Avenir Next", sans-serif;
-  --font-mono: "IBM Plex Mono", "SFMono-Regular", monospace;
+  --font-display:
+    "JetBrains Mono NF", "JetBrainsMono Nerd Font Mono", "JetBrains Mono",
+    "SFMono-Regular", monospace;
+  --font-sans:
+    "JetBrains Mono NF", "JetBrainsMono Nerd Font Mono", "JetBrains Mono",
+    "SFMono-Regular", monospace;
+  --font-mono:
+    "JetBrains Mono NF", "JetBrainsMono Nerd Font Mono", "JetBrains Mono",
+    "SFMono-Regular", monospace;
 }
 
 @layer base {
