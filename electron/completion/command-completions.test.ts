@@ -787,6 +787,33 @@ describe("resolveCommandCompletionsWithRegistry", () => {
       expect(response.yieldToPath).toBe(false);
     }
   });
+
+  it("suggests a fresh root command after wrappers and separators", async () => {
+    const cases = ["sudo ", "env FOO=1 ", "git status && "];
+
+    for (const draft of cases) {
+      const response = await resolveCommandCompletionsWithRegistry(
+        {
+          cwd: "/tmp/project",
+          draft,
+          offset: 0,
+          limit: 12,
+        },
+        registry,
+      );
+
+      expect(response.items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "command",
+            label: "git",
+          }),
+        ]),
+      );
+      expect(response.resolvedCommand).toBe(false);
+      expect(response.yieldToPath).toBe(false);
+    }
+  });
 });
 
 describe("generator command allowlist", () => {
@@ -800,6 +827,54 @@ describe("generator command allowlist", () => {
     expect(
       __testOnly.isGeneratorCommandAllowed("black", "black", "fig-local", new Set(["gh"])),
     ).toBe(true);
+  });
+});
+
+describe("default generator execution", () => {
+  it("runs through the configured shell so builtins and shell PATH work", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mishell-generator-shell-"));
+    tempDirectories.push(directory);
+
+    const binDirectory = path.join(directory, "bin");
+    fs.mkdirSync(binDirectory, { recursive: true });
+
+    const toolPath = path.join(binDirectory, "shell-only-tool");
+    fs.writeFileSync(toolPath, '#!/bin/sh\nprintf "shell-generated\\n"\n', "utf8");
+    fs.chmodSync(toolPath, 0o755);
+
+    const shellPath = path.join(directory, "login-shell");
+    fs.writeFileSync(
+      shellPath,
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "-lc" ]; then',
+        "  shift",
+        '  script="$1"',
+        "  shift",
+        `  export PATH="${binDirectory}:$PATH"`,
+        '  exec /bin/sh -lc "$script" "$@"',
+        "fi",
+        "exit 99",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.chmodSync(shellPath, 0o755);
+
+    const execute = __testOnly.createDefaultExecuteCommand({
+      shellExecutable: shellPath,
+    });
+    const result = await execute({
+      args: ["shell-only-tool"],
+      command: "command",
+      cwd: directory,
+    });
+
+    expect(result).toEqual({
+      exitCode: 0,
+      stderr: "",
+      stdout: "shell-generated\n",
+    });
   });
 });
 

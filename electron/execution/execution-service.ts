@@ -587,7 +587,9 @@ export function createExecutionService(
       return shellContext;
     },
     getCommandCompletions(input) {
-      return resolveCommandCompletions(input);
+      return resolveCommandCompletions(input, {
+        shellExecutable: shellContext.executable,
+      });
     },
     getHistoryAutocomplete(input) {
       return queryHistoryAutocomplete(options.database.db, input);

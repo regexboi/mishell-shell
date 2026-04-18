@@ -153,6 +153,15 @@ type ParsedDraft = {
   trailingWhitespace: boolean;
 };
 
+type CommandCompletionResolverOptions = {
+  shellExecutable?: string;
+};
+
+type CommandTokenResolution = {
+  index: number | null;
+  pendingCommand: boolean;
+};
+
 type ActiveCommandContext = {
   ancestors: Array<{
     source: "fig-local" | "fig-public";
@@ -191,13 +200,19 @@ let bundledGeneratorCommandAllowlist: Set<string> | null = null;
 
 export async function resolveCommandCompletions(
   input: CommandCompletionRequest,
+  options: CommandCompletionResolverOptions = {},
 ): Promise<CommandCompletionResponse> {
-  return resolveCommandCompletionsWithRegistry(input, createCommandRegistry(input.cwd));
+  return resolveCommandCompletionsWithRegistry(
+    input,
+    createCommandRegistry(input.cwd),
+    options,
+  );
 }
 
 export async function resolveCommandCompletionsWithRegistry(
   input: CommandCompletionRequest,
   registry: CommandRegistry,
+  options: CommandCompletionResolverOptions = {},
 ): Promise<CommandCompletionResponse> {
   const parsedDraft = parseCompletionDraft(input.draft);
   const limit = input.limit;
@@ -212,9 +227,21 @@ export async function resolveCommandCompletionsWithRegistry(
     };
   }
 
-  const commandTokenIndex = getCommandTokenIndex(parsedDraft.tokens);
+  const commandToken = resolveCommandToken(parsedDraft);
 
-  if (commandTokenIndex === null) {
+  if (commandToken.pendingCommand) {
+    return resolveRootCommandCompletions({
+      draft: input.draft,
+      limit,
+      offset,
+      query: "",
+      registry,
+      replacementEnd: input.draft.length,
+      replacementStart: input.draft.length,
+    });
+  }
+
+  if (commandToken.index === null) {
     return {
       hasMore: false,
       items: [],
@@ -223,20 +250,12 @@ export async function resolveCommandCompletionsWithRegistry(
     };
   }
 
-  const commandToken = parsedDraft.tokens[commandTokenIndex];
-  const isCompletingCommandToken = parsedDraft.currentToken === commandToken;
+  const commandTokenIndex = commandToken.index;
+  const currentCommandToken = parsedDraft.tokens[commandTokenIndex];
+  const isCompletingCommandToken = parsedDraft.currentToken === currentCommandToken;
 
   if (isCompletingCommandToken) {
     const commandQuery = parsedDraft.currentToken?.value ?? "";
-
-    if (!commandQuery) {
-      return {
-        hasMore: false,
-        items: [],
-        resolvedCommand: false,
-        yieldToPath: false,
-      };
-    }
 
     return resolveRootCommandCompletions({
       draft: input.draft,
@@ -255,6 +274,7 @@ export async function resolveCommandCompletionsWithRegistry(
     commandTokenIndex,
     input.cwd,
     input.draft.length,
+    options,
   );
 
   if (!context) {
@@ -546,12 +566,18 @@ async function resolveActiveCommandContext(
   commandTokenIndex: number,
   cwd: string,
   draftLength: number,
+  options: CommandCompletionResolverOptions,
 ): Promise<ActiveCommandContext | null> {
   const commandToken = parsedDraft.tokens[commandTokenIndex];
   const loadedRootSpec = await registry.loadSpec(commandToken.value);
   const executeCommand =
     registry.executeCommand ??
-    createGeneratorExecutor(commandToken.value, cwd, loadedRootSpec?.source ?? null);
+    createGeneratorExecutor(
+      commandToken.value,
+      cwd,
+      loadedRootSpec?.source ?? null,
+      options,
+    );
   const rootSpec = await materializeLoadedSpec(
     loadedRootSpec,
     parsedDraft.tokens
@@ -1026,7 +1052,17 @@ function resolveGeneratorScript(
   return null;
 }
 
-function createDefaultExecuteCommand(): ExecuteCommand {
+type GeneratorShellFlavor = "cmd" | "fish" | "powershell" | "posix";
+
+type CreateDefaultExecuteCommandOptions = {
+  shellExecutable?: string;
+};
+
+function createDefaultExecuteCommand(
+  options: CreateDefaultExecuteCommandOptions = {},
+): ExecuteCommand {
+  const shellExecutable = options.shellExecutable ?? getDefaultShellExecutable();
+
   return async ({ args = [], command, cwd }) =>
     new Promise((resolve) => {
       let stdout = "";
@@ -1059,7 +1095,12 @@ function createDefaultExecuteCommand(): ExecuteCommand {
       };
 
       try {
-        const child = spawn(command, args, {
+        const invocation = buildGeneratorShellInvocation(
+          shellExecutable,
+          command,
+          args,
+        );
+        const child = spawn(invocation.command, invocation.args, {
           cwd,
           stdio: ["ignore", "pipe", "pipe"],
         });
@@ -1118,8 +1159,9 @@ function createGeneratorExecutor(
   rootCommand: string,
   cwd: string,
   rootSource: "fig-local" | "fig-public" | null,
+  options: CommandCompletionResolverOptions = {},
 ): ExecuteCommand {
-  const execute = createDefaultExecuteCommand();
+  const execute = createDefaultExecuteCommand(options);
 
   return async ({ args = [], command, cwd: targetCwd = cwd }) => {
     if (!isGeneratorCommandAllowed(command, rootCommand, rootSource)) {
@@ -1136,6 +1178,99 @@ function createGeneratorExecutor(
       cwd: targetCwd,
     });
   };
+}
+
+function getDefaultShellExecutable() {
+  return (
+    process.env.SHELL ??
+    process.env.ComSpec ??
+    (process.platform === "win32" ? "powershell.exe" : os.userInfo().shell || "/bin/sh")
+  );
+}
+
+function buildGeneratorShellInvocation(
+  executable: string,
+  command: string,
+  args: string[],
+) {
+  const generatorArgs = [command, ...args];
+  const flavor = detectGeneratorShellFlavor(executable);
+
+  if (flavor === "powershell") {
+    return {
+      command: executable,
+      args: [
+        "-Command",
+        [
+          "if ($args.Length -eq 0) { exit 1 }",
+          "$mishellCommand = $args[0]",
+          "$mishellArgs = if ($args.Length -gt 1) { $args[1..($args.Length - 1)] } else { @() }",
+          "& $mishellCommand @mishellArgs",
+          "if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }",
+        ].join("; "),
+        ...generatorArgs,
+      ],
+    };
+  }
+
+  if (flavor === "cmd") {
+    return {
+      command: executable,
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        generatorArgs.map((value) => quoteCmdArgument(value)).join(" "),
+      ],
+    };
+  }
+
+  if (flavor === "fish") {
+    return {
+      command: executable,
+      args: ["-l", "-c", "$argv", "mishell-completion", ...generatorArgs],
+    };
+  }
+
+  return {
+    command: executable,
+    args: ["-lc", '"$@"', "mishell-completion", ...generatorArgs],
+  };
+}
+
+function detectGeneratorShellFlavor(executable: string): GeneratorShellFlavor {
+  const shellName = path.basename(executable).toLowerCase();
+
+  if (shellName === "fish") {
+    return "fish";
+  }
+
+  if (
+    shellName === "powershell" ||
+    shellName === "powershell.exe" ||
+    shellName === "pwsh" ||
+    shellName === "pwsh.exe"
+  ) {
+    return "powershell";
+  }
+
+  if (shellName === "cmd" || shellName === "cmd.exe") {
+    return "cmd";
+  }
+
+  return "posix";
+}
+
+function quoteCmdArgument(value: string) {
+  if (value.length === 0) {
+    return '""';
+  }
+
+  if (!/[\s"&|<>^]/.test(value)) {
+    return value;
+  }
+
+  return `"${value.replace(/"/g, '""')}"`;
 }
 
 function isGeneratorCommandAllowed(
@@ -1568,7 +1703,8 @@ function parseCompletionDraft(draft: string): ParsedDraft {
   };
 }
 
-function getCommandTokenIndex(tokens: CompletionToken[]) {
+function resolveCommandToken(parsedDraft: ParsedDraft): CommandTokenResolution {
+  const { tokens } = parsedDraft;
   let segmentStart = 0;
 
   for (let index = 0; index < tokens.length; index += 1) {
@@ -1578,9 +1714,11 @@ function getCommandTokenIndex(tokens: CompletionToken[]) {
   }
 
   let index = segmentStart;
+  let consumedCommandPrefix = segmentStart > 0;
 
   while (index < tokens.length && ENV_ASSIGNMENT_PATTERN.test(tokens[index]!.value)) {
     index += 1;
+    consumedCommandPrefix = true;
   }
 
   while (index < tokens.length) {
@@ -1588,18 +1726,38 @@ function getCommandTokenIndex(tokens: CompletionToken[]) {
     const normalized = token.toLowerCase();
 
     if (isCommandSeparatorToken(token)) {
-      return null;
+      return {
+        index: null,
+        pendingCommand: false,
+      };
     }
 
     if (normalized === "sudo" || normalized === "env" || WRAPPER_COMMANDS.has(normalized)) {
-      index = skipWrapperTokens(tokens, index, normalized);
+      const next = skipWrapperTokens(tokens, index, normalized);
+
+      if (next.awaitingOptionArgument) {
+        return {
+          index: null,
+          pendingCommand: false,
+        };
+      }
+
+      index = next.index;
+      consumedCommandPrefix = true;
       continue;
     }
 
-    return index;
+    return {
+      index,
+      pendingCommand: false,
+    };
   }
 
-  return null;
+  return {
+    index: null,
+    pendingCommand:
+      parsedDraft.trailingWhitespace && parsedDraft.tokens.length > 0 && consumedCommandPrefix,
+  };
 }
 
 function skipWrapperTokens(
@@ -1633,12 +1791,27 @@ function skipWrapperTokens(
     const consumesArgument = wrapperOptionConsumesNextToken(wrapper, value);
     index += 1;
 
-    if (consumesArgument && index < tokens.length && tokens[index]!.value !== "--") {
-      index += 1;
+    if (consumesArgument) {
+      if (
+        index < tokens.length &&
+        tokens[index]!.value !== "--" &&
+        !isCommandSeparatorToken(tokens[index]!.value)
+      ) {
+        index += 1;
+        continue;
+      }
+
+      return {
+        awaitingOptionArgument: true,
+        index,
+      };
     }
   }
 
-  return index;
+  return {
+    awaitingOptionArgument: false,
+    index,
+  };
 }
 
 function getShellCommandSeparator(draft: string, index: number) {
@@ -1814,6 +1987,7 @@ function hasFilesystemTemplate(template: string | string[] | undefined) {
 }
 
 export const __testOnly = {
+  createDefaultExecuteCommand,
   isGeneratorCommandAllowed,
 };
 

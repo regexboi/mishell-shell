@@ -450,42 +450,6 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     setCommandCompletionLoadingMore(false);
   });
 
-  const mergeCommandCompletionItems = useEffectEvent(
-    (
-      currentItems: CommandCompletionItem[],
-      nextItems: CommandCompletionItem[],
-    ): CommandCompletionItem[] => {
-      const merged = new Map<string, CommandCompletionItem>();
-
-      for (const item of currentItems) {
-        merged.set(
-          `${item.kind}:${item.label}:${item.nextValue}:${item.source}`,
-          item,
-        );
-      }
-
-      for (const item of nextItems) {
-        merged.set(
-          `${item.kind}:${item.label}:${item.nextValue}:${item.source}`,
-          item,
-        );
-      }
-
-      return [...merged.values()];
-    },
-  );
-
-  const mapPathCompletionToCommandCompletion = useEffectEvent(
-    (item: PathCompletionItem): CommandCompletionItem => ({
-      nextValue: item.nextValue,
-      label: item.label,
-      description: item.isDirectory ? "Directory" : "Path",
-      detail: item.path,
-      kind: "value",
-      source: "preview",
-    }),
-  );
-
   const invalidateInlineSuggestionRequests = useEffectEvent(() => {
     commandCompletionRequestRef.current += 1;
     autocompleteRequestRef.current += 1;
@@ -3133,6 +3097,36 @@ function measureTextareaCaret(textarea: HTMLTextAreaElement) {
 
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function mergeCommandCompletionItems(
+  currentItems: CommandCompletionItem[],
+  nextItems: CommandCompletionItem[],
+): CommandCompletionItem[] {
+  const merged = new Map<string, CommandCompletionItem>();
+
+  for (const item of currentItems) {
+    merged.set(`${item.kind}:${item.label}:${item.nextValue}:${item.source}`, item);
+  }
+
+  for (const item of nextItems) {
+    merged.set(`${item.kind}:${item.label}:${item.nextValue}:${item.source}`, item);
+  }
+
+  return [...merged.values()];
+}
+
+function mapPathCompletionToCommandCompletion(
+  item: PathCompletionItem,
+): CommandCompletionItem {
+  return {
+    nextValue: item.nextValue,
+    label: item.label,
+    description: item.isDirectory ? "Directory" : "Path",
+    detail: item.path,
+    kind: "value",
+    source: "preview",
+  };
 }
 
 function formatDuration(durationMs: number | null) {
