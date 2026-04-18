@@ -201,6 +201,12 @@ const themeOptions: ThemeOption[] = [
 ];
 
 const defaultTheme = themeOptions[0];
+const CARD_OUTPUT_FONT_FAMILY =
+  '"JetBrains Mono NF", "JetBrainsMono Nerd Font Mono", "JetBrains Mono", monospace';
+const CARD_OUTPUT_FONT_SIZE_PX = 14;
+const CARD_OUTPUT_LINE_HEIGHT_PX = 24;
+const CARD_OUTPUT_HORIZONTAL_CHROME_PX = 40;
+const CARD_OUTPUT_VERTICAL_CHROME_PX = 32;
 
 type RecallSession = {
   cwd: string;
@@ -208,6 +214,64 @@ type RecallSession = {
   items: HistoryRecallItem[];
   index: number;
 };
+
+function findNearestScrollParent(node: HTMLElement | null): HTMLElement | null {
+  let current = node?.parentElement ?? null;
+
+  while (current) {
+    const { overflowY } = window.getComputedStyle(current);
+
+    if (overflowY === "auto" || overflowY === "scroll") {
+      return current;
+    }
+
+    current = current.parentElement;
+  }
+
+  return null;
+}
+
+function clampToRange(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function measureCardExecutionSize(
+  container: HTMLElement | null,
+): { cols: number; rows: number } | null {
+  if (!container) {
+    return null;
+  }
+
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  const charSample = "0".repeat(64);
+
+  if (!context) {
+    return null;
+  }
+
+  context.font = `${CARD_OUTPUT_FONT_SIZE_PX}px ${CARD_OUTPUT_FONT_FAMILY}`;
+
+  const measuredWidth = context.measureText(charSample).width / charSample.length;
+  const charWidth = measuredWidth > 0 ? measuredWidth : 8;
+  const usableWidth = Math.max(
+    container.clientWidth - CARD_OUTPUT_HORIZONTAL_CHROME_PX,
+    charWidth * 40,
+  );
+  const usableHeight = Math.max(
+    container.clientHeight - CARD_OUTPUT_VERTICAL_CHROME_PX,
+    CARD_OUTPUT_LINE_HEIGHT_PX * 4,
+  );
+
+  return {
+    cols: clampToRange(Math.floor(usableWidth / charWidth), 40, 500),
+    rows: clampToRange(
+      Math.floor(usableHeight / CARD_OUTPUT_LINE_HEIGHT_PX),
+      4,
+      300,
+    ),
+  };
+}
 
 export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const api = getMishellApi();
@@ -222,6 +286,11 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const terminalControllerRef = useRef<TerminalModeSurfaceController | null>(null);
   const terminalOutputBacklogRef = useRef(new Map<string, string[]>());
   const shouldStickFeedToBottomRef = useRef(true);
+  const lastExecutionResizeRef = useRef<{
+    cols: number;
+    executionId: string;
+    rows: number;
+  } | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [shellContext, setShellContext] = useState<ShellContext>(bootstrap.shell);
   const [draft, setDraft] = useState("");
@@ -538,7 +607,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         return;
       }
 
-      void api.app.resizeTerminal({
+      void api.app.resizeExecution({
         executionId: activeTerminalExecutionId,
         cols,
         rows,
@@ -884,6 +953,76 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     feed.scrollTop = feed.scrollHeight;
   }, [executions]);
 
+  useEffect(() => {
+    if (
+      !runningExecution ||
+      runningExecution.presentation !== "card" ||
+      activeTerminalExecutionId
+    ) {
+      lastExecutionResizeRef.current = null;
+      return;
+    }
+
+    const feed = feedScrollRef.current;
+
+    if (!feed) {
+      return;
+    }
+
+    let frame = 0;
+    const sendResize = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const size = measureCardExecutionSize(feedScrollRef.current);
+
+        if (!size) {
+          return;
+        }
+
+        const lastResize = lastExecutionResizeRef.current;
+
+        if (
+          lastResize &&
+          lastResize.executionId === runningExecution.id &&
+          lastResize.cols === size.cols &&
+          lastResize.rows === size.rows
+        ) {
+          return;
+        }
+
+        lastExecutionResizeRef.current = {
+          executionId: runningExecution.id,
+          ...size,
+        };
+
+        void api.app.resizeExecution({
+          executionId: runningExecution.id,
+          cols: size.cols,
+          rows: size.rows,
+        });
+      });
+    };
+
+    const resizeObserver = new ResizeObserver(() => {
+      sendResize();
+    });
+
+    resizeObserver.observe(feed);
+    sendResize();
+    window.addEventListener("resize", sendResize);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", sendResize);
+      resizeObserver.disconnect();
+    };
+  }, [
+    api,
+    activeTerminalExecutionId,
+    runningExecution?.id,
+    runningExecution?.presentation,
+  ]);
+
   const submitCommand = useEffectEvent(async () => {
     const commandText = draft.trim();
 
@@ -902,7 +1041,11 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     let responseMode: "card" | "terminal" | null = null;
 
     try {
-      const response = await api.app.runCommand({ commandText });
+      const cardExecutionSize = measureCardExecutionSize(feedScrollRef.current);
+      const response = await api.app.runCommand({
+        commandText,
+        ...cardExecutionSize,
+      });
       responseMode = response.mode;
 
       if (response.mode === "terminal") {
@@ -1728,47 +1871,38 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                       shouldStickFeedToBottomRef.current = distanceFromBottom <= 48;
                     }}
                   >
-                    {executions.length === 0 ? (
-                      <div className="border border-dashed border-[color:var(--border)] bg-[color:var(--panel-muted)] px-5 py-6 text-sm text-[color:var(--text-secondary)]">
-                        Run a command to create the first card. Good smoke checks
-                        are `pwd`, `git status --short`, a failing command like
-                        `false`, and `vim README.md` to confirm terminal-mode
-                        fallback.
+                    <div className="flex min-h-full min-w-0 flex-col justify-end">
+                      <div className="flex min-w-0 flex-col divide-y divide-[color:var(--border)]">
+                        {feedExecutions.map((execution) => (
+                          <CommandCard
+                            key={execution.id}
+                            execution={execution}
+                            onInterrupt={
+                              execution.status === "running"
+                                ? () => {
+                                    void interruptExecution(execution.id);
+                                  }
+                                : undefined
+                            }
+                            onCopyCommand={() => {
+                              void copyText(execution.commandText, "Command");
+                            }}
+                            onCopyOutput={() => {
+                              void copyText(execution.output, "Output");
+                            }}
+                            onCopyBoth={() => {
+                              void copyText(
+                                `cmd: ${execution.commandText}\nout: ${execution.output}`,
+                                "Command + output",
+                              );
+                            }}
+                            onOpenFullOutput={() => {
+                              setFullOutputExecutionId(execution.id);
+                            }}
+                          />
+                        ))}
                       </div>
-                    ) : (
-                      <div className="flex min-h-full min-w-0 flex-col justify-end">
-                        <div className="flex min-w-0 flex-col divide-y divide-[color:var(--border)]">
-                          {feedExecutions.map((execution) => (
-                            <CommandCard
-                              key={execution.id}
-                              execution={execution}
-                              onInterrupt={
-                                execution.status === "running"
-                                  ? () => {
-                                      void interruptExecution(execution.id);
-                                    }
-                                  : undefined
-                              }
-                              onCopyCommand={() => {
-                                void copyText(execution.commandText, "Command");
-                              }}
-                              onCopyOutput={() => {
-                                void copyText(execution.output, "Output");
-                              }}
-                              onCopyBoth={() => {
-                                void copyText(
-                                  `cmd: ${execution.commandText}\nout: ${execution.output}`,
-                                  "Command + output",
-                                );
-                              }}
-                              onOpenFullOutput={() => {
-                                setFullOutputExecutionId(execution.id);
-                              }}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    )}
+                    </div>
                   </div>
                 </section>
 
@@ -2183,7 +2317,71 @@ function CommandCard({
         (isTerminalPresentation
           ? "Terminal mode is active in the compatibility surface."
           : "Waiting for output…")
-      : execution.outputPreview || "No output captured.";
+      : execution.output;
+  const hasVisibleOutput =
+    execution.status === "running"
+      ? Boolean(execution.output.trim())
+      : Boolean(execution.output.trim());
+  const outputViewportRef = useRef<HTMLDivElement | null>(null);
+  const outputScrollerRef = useRef<HTMLDivElement | null>(null);
+  const shouldStickOutputToBottomRef = useRef(true);
+  const [outputMaxHeight, setOutputMaxHeight] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    const viewport = outputViewportRef.current;
+
+    if (!viewport) {
+      return;
+    }
+
+    const scrollParent = findNearestScrollParent(viewport);
+    let frame = 0;
+
+    const updateOutputMaxHeight = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        if (!outputViewportRef.current) {
+          return;
+        }
+
+        const rect = outputViewportRef.current.getBoundingClientRect();
+        const viewportBottom = window.innerHeight - 16;
+        const scrollParentBottom = scrollParent
+          ? scrollParent.getBoundingClientRect().bottom - 16
+          : viewportBottom;
+        const nextMaxHeight = Math.max(
+          160,
+          Math.floor(Math.min(viewportBottom, scrollParentBottom) - rect.top),
+        );
+
+        setOutputMaxHeight((current) =>
+          current === nextMaxHeight ? current : nextMaxHeight,
+        );
+      });
+    };
+
+    updateOutputMaxHeight();
+    window.addEventListener("resize", updateOutputMaxHeight);
+    scrollParent?.addEventListener("scroll", updateOutputMaxHeight, {
+      passive: true,
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", updateOutputMaxHeight);
+      scrollParent?.removeEventListener("scroll", updateOutputMaxHeight);
+    };
+  }, [execution.id]);
+
+  useLayoutEffect(() => {
+    const scroller = outputScrollerRef.current;
+
+    if (!scroller || !shouldStickOutputToBottomRef.current) {
+      return;
+    }
+
+    scroller.scrollTop = scroller.scrollHeight;
+  }, [displayOutput, outputMaxHeight]);
 
   return (
     <article className="w-full min-w-0 py-5">
@@ -2200,7 +2398,39 @@ function CommandCard({
             {isTerminalPresentation ? <span>terminal mode</span> : null}
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={onCopyCommand}>
+              <Clipboard className="h-3.5 w-3.5" />
+              Copy command
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!execution.output || isTerminalPresentation}
+              onClick={onCopyOutput}
+            >
+              <Clipboard className="h-3.5 w-3.5" />
+              Copy output
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!execution.output || isTerminalPresentation}
+              onClick={onCopyBoth}
+            >
+              <Clipboard className="h-3.5 w-3.5" />
+              Copy both
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!execution.output || isTerminalPresentation}
+              onClick={onOpenFullOutput}
+            >
+              Full output
+            </Button>
+          </div>
           {execution.status === "running" && onInterrupt ? (
             <Button
               variant="ghost"
@@ -2216,44 +2446,29 @@ function CommandCard({
         </div>
       </div>
 
-      <div className="mt-4 border border-[color:var(--border)] bg-black/20">
-        <pre className="mishell-overlay-scroll m-0 max-h-48 overflow-auto whitespace-pre-wrap px-4 py-4 font-mono text-sm leading-6 text-[color:var(--text-secondary)]">
-          {displayOutput}
-        </pre>
-      </div>
+      {hasVisibleOutput ? (
+        <div
+          ref={outputViewportRef}
+          className="mt-4 border border-[color:var(--border)] bg-black/20"
+        >
+          <div
+            ref={outputScrollerRef}
+            className="mishell-overlay-scroll overflow-auto"
+            style={outputMaxHeight ? { maxHeight: `${outputMaxHeight}px` } : undefined}
+            onScroll={(event) => {
+              const node = event.currentTarget;
+              const distanceFromBottom =
+                node.scrollHeight - node.clientHeight - node.scrollTop;
 
-      <div className="mt-4 flex flex-wrap gap-2">
-        <Button variant="ghost" size="sm" onClick={onCopyCommand}>
-          <Clipboard className="h-3.5 w-3.5" />
-          Copy command
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={!execution.output || isTerminalPresentation}
-          onClick={onCopyOutput}
-        >
-          <Clipboard className="h-3.5 w-3.5" />
-          Copy output
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={!execution.output || isTerminalPresentation}
-          onClick={onCopyBoth}
-        >
-          <Clipboard className="h-3.5 w-3.5" />
-          Copy both
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={!execution.output || isTerminalPresentation}
-          onClick={onOpenFullOutput}
-        >
-          Full output
-        </Button>
-      </div>
+              shouldStickOutputToBottomRef.current = distanceFromBottom <= 32;
+            }}
+          >
+            <pre className="m-0 min-w-max whitespace-pre px-4 py-4 font-mono text-sm leading-6 text-[color:var(--text-secondary)]">
+              {displayOutput}
+            </pre>
+          </div>
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -2741,8 +2956,8 @@ function HistorySearchDialog({
 function StatusPill({ status }: { status: CommandExecution["status"] }) {
   if (status === "running") {
     return (
-      <span className="inline-flex items-center gap-2 border border-[color:var(--border-strong)] px-2 py-1 text-[11px] uppercase tracking-[0.24em] text-[color:var(--accent)]">
-        <span className="h-2 w-2 animate-pulse bg-[color:var(--accent)]" />
+      <span className="inline-flex items-center gap-1.5 border border-[color:var(--border-strong)] px-1.5 py-0.5 text-[10px] uppercase tracking-[0.18em] text-[color:var(--accent)]">
+        <span className="h-1.5 w-1.5 animate-pulse bg-[color:var(--accent)]" />
         running
       </span>
     );
@@ -2750,16 +2965,16 @@ function StatusPill({ status }: { status: CommandExecution["status"] }) {
 
   if (status === "succeeded") {
     return (
-      <span className="inline-flex items-center gap-2 border border-emerald-400/40 px-2 py-1 text-[11px] uppercase tracking-[0.24em] text-emerald-200">
-        <Check className="h-3.5 w-3.5" />
+      <span className="inline-flex items-center gap-1.5 border border-emerald-400/40 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.18em] text-emerald-200">
+        <Check className="h-3 w-3" />
         success
       </span>
     );
   }
 
   return (
-    <span className="inline-flex items-center gap-2 border border-amber-400/40 px-2 py-1 text-[11px] uppercase tracking-[0.24em] text-amber-200">
-      <TriangleAlert className="h-3.5 w-3.5" />
+    <span className="inline-flex items-center gap-1.5 border border-amber-400/40 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.18em] text-amber-200">
+      <TriangleAlert className="h-3 w-3" />
       failed
     </span>
   );

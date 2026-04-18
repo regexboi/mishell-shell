@@ -5,6 +5,7 @@ import {
   commandCompletionRequestSchema,
   commandCompletionResponseSchema,
   executionEventSchema,
+  executionResizeRequestSchema,
   historyAutocompleteRequestSchema,
   historyAutocompleteResponseSchema,
   historyRecallRequestSchema,
@@ -18,7 +19,6 @@ import {
   runCommandRequestSchema,
   runCommandResponseSchema,
   terminalInputRequestSchema,
-  terminalResizeRequestSchema,
   writeClipboardRequestSchema,
 } from "@shared/contracts";
 
@@ -66,8 +66,8 @@ export function registerAppIpc(runtime: AppRuntime) {
     );
   });
 
-  ipcMain.handle(ipcChannels.resizeTerminal, (_event, input) => {
-    runtime.execution.resizeTerminal(terminalResizeRequestSchema.parse(input));
+  ipcMain.handle(ipcChannels.resizeExecution, (_event, input) => {
+    runtime.execution.resizeExecution(executionResizeRequestSchema.parse(input));
   });
 
   ipcMain.handle(ipcChannels.writeClipboard, (_event, input) => {

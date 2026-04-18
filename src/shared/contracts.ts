@@ -6,7 +6,7 @@ export const ipcChannels = {
   interruptExecution: "app:interrupt-execution",
   executionEvent: "app:execution-event",
   writeTerminalInput: "terminal:write-input",
-  resizeTerminal: "terminal:resize",
+  resizeExecution: "execution:resize",
   getCommandCompletions: "shell:get-command-completions",
   getPathCompletions: "shell:get-path-completions",
   writeClipboard: "app:write-clipboard",
@@ -63,6 +63,8 @@ export const bootstrapPayloadSchema = z.object({
 
 export const runCommandRequestSchema = z.object({
   commandText: z.string().trim().min(1),
+  cols: z.number().int().positive().max(500).optional(),
+  rows: z.number().int().positive().max(300).optional(),
 });
 
 export const runCommandResponseSchema = z.object({
@@ -79,7 +81,7 @@ export const terminalInputRequestSchema = z.object({
   data: z.string().min(1),
 });
 
-export const terminalResizeRequestSchema = z.object({
+export const executionResizeRequestSchema = z.object({
   executionId: z.string(),
   cols: z.number().int().positive().max(500),
   rows: z.number().int().positive().max(300),
@@ -284,4 +286,4 @@ export type RunCommandResponse = z.infer<typeof runCommandResponseSchema>;
 export type ShellContext = z.infer<typeof shellContextSchema>;
 export type ShellSurface = z.infer<typeof shellSurfaceSchema>;
 export type TerminalInputRequest = z.infer<typeof terminalInputRequestSchema>;
-export type TerminalResizeRequest = z.infer<typeof terminalResizeRequestSchema>;
+export type ExecutionResizeRequest = z.infer<typeof executionResizeRequestSchema>;

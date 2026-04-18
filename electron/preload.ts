@@ -5,6 +5,7 @@ import {
   bootstrapPayloadSchema,
   commandCompletionResponseSchema,
   executionEventSchema,
+  executionResizeRequestSchema,
   historyAutocompleteResponseSchema,
   historyRecallResponseSchema,
   historySearchResponseSchema,
@@ -13,7 +14,6 @@ import {
   pathCompletionResponseSchema,
   runCommandResponseSchema,
   terminalInputRequestSchema,
-  terminalResizeRequestSchema,
 } from "@shared/contracts";
 
 const api: MishellApi = {
@@ -56,10 +56,10 @@ const api: MishellApi = {
         terminalInputRequestSchema.parse(input),
       );
     },
-    async resizeTerminal(input) {
+    async resizeExecution(input) {
       await ipcRenderer.invoke(
-        ipcChannels.resizeTerminal,
-        terminalResizeRequestSchema.parse(input),
+        ipcChannels.resizeExecution,
+        executionResizeRequestSchema.parse(input),
       );
     },
     onExecutionEvent(listener) {

@@ -20,11 +20,11 @@ import type {
   InterruptExecutionRequest,
   PathCompletionRequest,
   PathCompletionResponse,
+  ExecutionResizeRequest,
   RunCommandRequest,
   RunCommandResponse,
   ShellContext,
   TerminalInputRequest,
-  TerminalResizeRequest,
 } from "@shared/contracts";
 import {
   getPrimaryCommand,
@@ -91,6 +91,11 @@ type CompletionContextOptions = {
   pathApi?: CompletionPathApi;
 };
 
+const CARD_EXECUTION_COLS = 220;
+const CARD_EXECUTION_ROWS = 60;
+const TERMINAL_EXECUTION_COLS = 120;
+const TERMINAL_EXECUTION_ROWS = 40;
+
 export type ExecutionService = {
   getShellContext: () => ShellContext;
   getCommandCompletions: (
@@ -108,7 +113,7 @@ export type ExecutionService = {
   ) => Promise<RunCommandResponse>;
   interruptExecution: (input: InterruptExecutionRequest) => void;
   writeTerminalInput: (input: TerminalInputRequest) => void;
-  resizeTerminal: (input: TerminalResizeRequest) => void;
+  resizeExecution: (input: ExecutionResizeRequest) => void;
   dispose: () => void;
 };
 
@@ -273,13 +278,15 @@ export function createExecutionService(
         buildCardShellArguments(shellContext.executable),
         {
           name: "xterm-256color",
-          cols: 120,
-          rows: 40,
+          cols: input.cols ?? CARD_EXECUTION_COLS,
+          rows: input.rows ?? CARD_EXECUTION_ROWS,
           cwd: shellContext.cwd,
           env: buildShellEnvironment({
             commandText: input.commandText,
             marker,
             cwdCapturePath,
+            cols: input.cols ?? CARD_EXECUTION_COLS,
+            rows: input.rows ?? CARD_EXECUTION_ROWS,
           }),
         },
       );
@@ -482,12 +489,14 @@ export function createExecutionService(
         buildTerminalShellArguments(shellContext.executable),
         {
           name: "xterm-256color",
-          cols: 120,
-          rows: 40,
+          cols: TERMINAL_EXECUTION_COLS,
+          rows: TERMINAL_EXECUTION_ROWS,
           cwd: shellContext.cwd,
           env: buildShellEnvironment({
             commandText: input.commandText,
             cwdCapturePath,
+            cols: TERMINAL_EXECUTION_COLS,
+            rows: TERMINAL_EXECUTION_ROWS,
           }),
         },
       );
@@ -610,7 +619,14 @@ export function createExecutionService(
     writeTerminalInput(input) {
       activeTerminalExecutions.get(input.executionId)?.child.write(input.data);
     },
-    resizeTerminal(input) {
+    resizeExecution(input) {
+      const activeCardExecution = activeCardExecutions.get(input.executionId);
+
+      if (activeCardExecution) {
+        activeCardExecution.child.resize(input.cols, input.rows);
+        return;
+      }
+
       activeTerminalExecutions.get(input.executionId)?.child.resize(
         input.cols,
         input.rows,
@@ -792,16 +808,22 @@ function buildShellEnvironment({
   commandText,
   marker,
   cwdCapturePath,
+  cols,
+  rows,
 }: {
   commandText: string;
   marker?: string;
   cwdCapturePath?: string;
+  cols?: number;
+  rows?: number;
 }) {
   return {
     ...process.env,
     MISHELL_COMMAND: commandText,
     ...(marker ? { MISHELL_MARKER: marker } : {}),
     ...(cwdCapturePath ? { MISHELL_CWD_FILE: cwdCapturePath } : {}),
+    ...(cols ? { COLUMNS: String(cols) } : {}),
+    ...(rows ? { LINES: String(rows) } : {}),
   };
 }
 

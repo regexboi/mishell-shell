@@ -277,7 +277,7 @@ const browserFallback: MishellApi = {
     async writeTerminalInput() {
       return;
     },
-    async resizeTerminal() {
+    async resizeExecution() {
       return;
     },
     onExecutionEvent(listener) {

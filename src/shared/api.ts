@@ -14,8 +14,8 @@ import type {
   PathCompletionResponse,
   RunCommandRequest,
   RunCommandResponse,
+  ExecutionResizeRequest,
   TerminalInputRequest,
-  TerminalResizeRequest,
 } from "./contracts";
 
 export interface MishellApi {
@@ -30,7 +30,7 @@ export interface MishellApi {
       input: PathCompletionRequest,
     ) => Promise<PathCompletionResponse>;
     writeTerminalInput: (input: TerminalInputRequest) => Promise<void>;
-    resizeTerminal: (input: TerminalResizeRequest) => Promise<void>;
+    resizeExecution: (input: ExecutionResizeRequest) => Promise<void>;
     onExecutionEvent: (listener: (event: ExecutionEvent) => void) => () => void;
   };
   history: {
