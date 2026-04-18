@@ -186,7 +186,18 @@ type PendingOptionArgument = {
   option: FigOption;
 };
 
-const publicCommandIndexPromiseCache = new Map<string, Promise<string[]>>();
+const LOCAL_COMMAND_INDEX_CACHE_LIMIT = 32;
+const LOCAL_COMMAND_SPEC_CACHE_LIMIT = 128;
+const FIG_COMMAND_TOP_LEVEL_KEYS = new Set([
+  "args",
+  "description",
+  "generateSpec",
+  "loadSpec",
+  "name",
+  "options",
+  "subcommands",
+]);
+let publicCommandIndexPromise: Promise<string[]> | null = null;
 const localCommandIndexPromiseCache = new Map<string, Promise<string[]>>();
 const localCommandSpecPromiseCache = new Map<
   string,
@@ -196,7 +207,7 @@ const bundledPublicSpecRegistry = bundledPublicSpecs as {
   commands: string[];
   specs: Record<string, FigCommand>;
 };
-let bundledGeneratorCommandAllowlist: Set<string> | null = null;
+const bundledGeneratorCommandAllowlist = buildBundledGeneratorCommandAllowlist();
 
 export async function resolveCommandCompletions(
   input: CommandCompletionRequest,
@@ -363,11 +374,12 @@ function getLocalSpecDirectories(cwd: string) {
 async function loadLocalCommandIndex(specDirectories: string[]) {
   const cacheKey = specDirectories.join("|");
 
-  if (!localCommandIndexPromiseCache.has(cacheKey)) {
-    localCommandIndexPromiseCache.set(cacheKey, Promise.resolve(scanLocalCommandIndex(specDirectories)));
-  }
-
-  return localCommandIndexPromiseCache.get(cacheKey)!;
+  return getOrCreateCappedPromiseCacheEntry(
+    localCommandIndexPromiseCache,
+    cacheKey,
+    () => Promise.resolve(scanLocalCommandIndex(specDirectories)),
+    LOCAL_COMMAND_INDEX_CACHE_LIMIT,
+  );
 }
 
 function scanLocalCommandIndex(specDirectories: string[]) {
@@ -404,16 +416,11 @@ function scanLocalCommandIndex(specDirectories: string[]) {
 }
 
 async function loadPublicCommandIndex() {
-  const cacheKey = "bundled-public-spec-index";
-
-  if (!publicCommandIndexPromiseCache.has(cacheKey)) {
-    publicCommandIndexPromiseCache.set(
-      cacheKey,
-      Promise.resolve(getBundledPublicCommandIndex()),
-    );
+  if (!publicCommandIndexPromise) {
+    publicCommandIndexPromise = Promise.resolve(getBundledPublicCommandIndex());
   }
 
-  return publicCommandIndexPromiseCache.get(cacheKey)!;
+  return publicCommandIndexPromise;
 }
 
 async function loadBundledCommandIndex() {
@@ -433,11 +440,12 @@ async function loadLocalSpec(
 ): Promise<{ source: "fig-local"; spec: FigCommand } | null> {
   const cacheKey = `${specDirectories.join("|")}::${name}`;
 
-  if (!localCommandSpecPromiseCache.has(cacheKey)) {
-    localCommandSpecPromiseCache.set(cacheKey, Promise.resolve(importLocalSpec(name, specDirectories)));
-  }
-
-  return localCommandSpecPromiseCache.get(cacheKey)!;
+  return getOrCreateCappedPromiseCacheEntry(
+    localCommandSpecPromiseCache,
+    cacheKey,
+    () => Promise.resolve(importLocalSpec(name, specDirectories)),
+    LOCAL_COMMAND_SPEC_CACHE_LIMIT,
+  );
 }
 
 async function importLocalSpec(
@@ -1287,16 +1295,15 @@ function isGeneratorCommandAllowed(
 }
 
 function getBundledGeneratorCommandAllowlist() {
-  if (bundledGeneratorCommandAllowlist) {
-    return bundledGeneratorCommandAllowlist;
-  }
+  return bundledGeneratorCommandAllowlist;
+}
 
+function buildBundledGeneratorCommandAllowlist() {
   const commands = new Set<string>();
 
   collectGeneratorCommands(bundledPublicSpecRegistry.specs, commands);
-  bundledGeneratorCommandAllowlist = commands;
 
-  return bundledGeneratorCommandAllowlist;
+  return commands;
 }
 
 function collectGeneratorCommands(value: unknown, commands: Set<string>) {
@@ -1948,7 +1955,13 @@ function matchesAlias(name: string | string[] | undefined, tokenValue: string) {
 }
 
 function getSpecFilePath(directory: string, name: string) {
-  const basePath = path.join(directory, ...name.split("/"));
+  const pathSegments = getLocalSpecPathSegments(name);
+
+  if (!pathSegments) {
+    return null;
+  }
+
+  const basePath = path.join(directory, ...pathSegments);
   const directFile = `${basePath}.json`;
 
   if (fs.existsSync(directFile)) {
@@ -1968,8 +1981,71 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function isFigCommandName(value: unknown): value is string | string[] {
+  return typeof value === "string" || isStringArray(value);
+}
+
+function getLocalSpecPathSegments(name: string) {
+  if (!name || path.isAbsolute(name)) {
+    return null;
+  }
+
+  const segments = name.split(/[\\/]/);
+
+  if (
+    segments.some(
+      (segment) => segment.length === 0 || segment === "." || segment === "..",
+    )
+  ) {
+    return null;
+  }
+
+  return segments;
+}
+
 function isFigCommand(value: unknown): value is FigCommand {
-  return typeof value === "object" && value !== null;
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  const keys = Object.keys(value);
+
+  if (
+    keys.length === 0 ||
+    keys.some((key) => !FIG_COMMAND_TOP_LEVEL_KEYS.has(key))
+  ) {
+    return false;
+  }
+
+  if ("name" in value && !isFigCommandName(value.name)) {
+    return false;
+  }
+
+  if ("description" in value && typeof value.description !== "string") {
+    return false;
+  }
+
+  if ("loadSpec" in value && typeof value.loadSpec !== "string") {
+    return false;
+  }
+
+  if ("subcommands" in value && !Array.isArray(value.subcommands)) {
+    return false;
+  }
+
+  if ("options" in value && !Array.isArray(value.options)) {
+    return false;
+  }
+
+  if ("args" in value && !(isRecord(value.args) || Array.isArray(value.args))) {
+    return false;
+  }
+
+  return true;
 }
 
 function getSpecSourceDetail(source: "fig-local" | "fig-public") {
@@ -1988,8 +2064,50 @@ function hasFilesystemTemplate(template: string | string[] | undefined) {
 
 export const __testOnly = {
   createDefaultExecuteCommand,
+  getCacheSizes: () => ({
+    localCommandIndex: localCommandIndexPromiseCache.size,
+    localCommandSpec: localCommandSpecPromiseCache.size,
+    publicCommandIndex: publicCommandIndexPromise ? 1 : 0,
+  }),
   isGeneratorCommandAllowed,
+  resetCaches: () => {
+    publicCommandIndexPromise = null;
+    localCommandIndexPromiseCache.clear();
+    localCommandSpecPromiseCache.clear();
+  },
 };
+
+function getOrCreateCappedPromiseCacheEntry<T>(
+  cache: Map<string, Promise<T>>,
+  key: string,
+  load: () => Promise<T>,
+  maxEntries: number,
+) {
+  const existing = cache.get(key);
+
+  if (existing) {
+    cache.delete(key);
+    cache.set(key, existing);
+    return existing;
+  }
+
+  const value = load().catch((error) => {
+    cache.delete(key);
+    throw error;
+  });
+
+  cache.set(key, value);
+
+  if (cache.size > maxEntries) {
+    const oldestKey = cache.keys().next().value;
+
+    if (oldestKey !== undefined) {
+      cache.delete(oldestKey);
+    }
+  }
+
+  return value;
+}
 
 async function materializeLoadedSpec(
   loaded: {

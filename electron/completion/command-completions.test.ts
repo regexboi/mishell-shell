@@ -343,6 +343,7 @@ afterEach(() => {
     fs.rmSync(directory, { force: true, recursive: true });
   }
 
+  __testOnly.resetCaches();
   vi.restoreAllMocks();
 });
 
@@ -934,6 +935,61 @@ describe("resolveCommandCompletions", () => {
     expect(response.yieldToPath).toBe(false);
   });
 
+  it("rejects escaped local spec paths outside the Fig build directory", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mishell-local-spec-"));
+    tempDirectories.push(directory);
+    const buildDirectory = path.join(directory, ".fig", "autocomplete", "build");
+    fs.mkdirSync(buildDirectory, { recursive: true });
+    fs.writeFileSync(
+      path.join(directory, "escaped.json"),
+      JSON.stringify({
+        name: "escaped",
+        subcommands: [{ name: "pwn" }],
+      }),
+      "utf8",
+    );
+
+    const response = await resolveCommandCompletions({
+      cwd: directory,
+      draft: "../../../escaped ",
+      offset: 0,
+      limit: 8,
+    });
+
+    expect(response.items).toEqual([]);
+    expect(response.resolvedCommand).toBe(false);
+    expect(response.yieldToPath).toBe(false);
+  });
+
+  it("rejects local JSON files that do not match the supported Fig command shape", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mishell-local-spec-"));
+    tempDirectories.push(directory);
+    const buildDirectory = path.join(directory, ".fig", "autocomplete", "build");
+    fs.mkdirSync(buildDirectory, { recursive: true });
+    fs.writeFileSync(
+      path.join(buildDirectory, "localcmd.json"),
+      JSON.stringify({
+        name: "localcmd",
+        scripts: {
+          dev: "vite",
+        },
+        version: "1.0.0",
+      }),
+      "utf8",
+    );
+
+    const response = await resolveCommandCompletions({
+      cwd: directory,
+      draft: "localcmd ",
+      offset: 0,
+      limit: 8,
+    });
+
+    expect(response.items).toEqual([]);
+    expect(response.resolvedCommand).toBe(false);
+    expect(response.yieldToPath).toBe(false);
+  });
+
   it("keeps default-registry dynamic generators constrained", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mishell-local-spec-"));
     tempDirectories.push(directory);
@@ -1023,5 +1079,66 @@ describe("resolveCommandCompletions", () => {
     );
     expect(response.resolvedCommand).toBe(true);
     expect(response.yieldToPath).toBe(false);
+  });
+
+  it("caps local command index caches across many working directories", async () => {
+    for (let index = 0; index < 40; index += 1) {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mishell-local-spec-"));
+      tempDirectories.push(directory);
+      const buildDirectory = path.join(directory, ".fig", "autocomplete", "build");
+      fs.mkdirSync(buildDirectory, { recursive: true });
+      fs.writeFileSync(
+        path.join(buildDirectory, "localcmd.json"),
+        JSON.stringify({
+          description: `Directory ${index}`,
+          name: "localcmd",
+        }),
+        "utf8",
+      );
+
+      await resolveCommandCompletions({
+        cwd: directory,
+        draft: "loc",
+        offset: 0,
+        limit: 8,
+      });
+    }
+
+    expect(__testOnly.getCacheSizes()).toEqual({
+      localCommandIndex: 32,
+      localCommandSpec: 128,
+      publicCommandIndex: 1,
+    });
+  });
+
+  it("caps local spec caches to avoid unbounded growth", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mishell-local-spec-"));
+    tempDirectories.push(directory);
+    const buildDirectory = path.join(directory, ".fig", "autocomplete", "build");
+    fs.mkdirSync(buildDirectory, { recursive: true });
+
+    for (let index = 0; index < 140; index += 1) {
+      fs.writeFileSync(
+        path.join(buildDirectory, `cmd-${index}.json`),
+        JSON.stringify({
+          description: `Command ${index}`,
+          name: `cmd-${index}`,
+        }),
+        "utf8",
+      );
+
+      await resolveCommandCompletions({
+        cwd: directory,
+        draft: `cmd-${index} `,
+        offset: 0,
+        limit: 8,
+      });
+    }
+
+    expect(__testOnly.getCacheSizes()).toEqual({
+      localCommandIndex: 0,
+      localCommandSpec: 128,
+      publicCommandIndex: 0,
+    });
   });
 });
