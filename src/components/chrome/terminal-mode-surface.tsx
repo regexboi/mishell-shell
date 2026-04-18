@@ -64,7 +64,8 @@ export function TerminalModeSurface({
           allowTransparency: true,
           cursorBlink: true,
           cursorStyle: "block",
-          fontFamily: '"IBM Plex Mono", monospace',
+          fontFamily:
+            '"JetBrains Mono NF", "JetBrainsMono Nerd Font Mono", "JetBrains Mono", monospace',
           fontSize: 14,
           theme,
         });

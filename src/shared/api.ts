@@ -1,5 +1,7 @@
 import type {
   BootstrapPayload,
+  CommandCompletionRequest,
+  CommandCompletionResponse,
   ExecutionEvent,
   HistoryAutocompleteRequest,
   HistoryAutocompleteResponse,
@@ -12,8 +14,8 @@ import type {
   PathCompletionResponse,
   RunCommandRequest,
   RunCommandResponse,
+  ExecutionResizeRequest,
   TerminalInputRequest,
-  TerminalResizeRequest,
 } from "./contracts";
 
 export interface MishellApi {
@@ -21,11 +23,14 @@ export interface MishellApi {
     getBootstrap: () => Promise<BootstrapPayload>;
     runCommand: (input: RunCommandRequest) => Promise<RunCommandResponse>;
     interruptExecution: (input: InterruptExecutionRequest) => Promise<void>;
+    getCommandCompletions: (
+      input: CommandCompletionRequest,
+    ) => Promise<CommandCompletionResponse>;
     getPathCompletions: (
       input: PathCompletionRequest,
     ) => Promise<PathCompletionResponse>;
     writeTerminalInput: (input: TerminalInputRequest) => Promise<void>;
-    resizeTerminal: (input: TerminalResizeRequest) => Promise<void>;
+    resizeExecution: (input: ExecutionResizeRequest) => Promise<void>;
     onExecutionEvent: (listener: (event: ExecutionEvent) => void) => () => void;
   };
   history: {

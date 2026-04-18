@@ -6,7 +6,8 @@ export const ipcChannels = {
   interruptExecution: "app:interrupt-execution",
   executionEvent: "app:execution-event",
   writeTerminalInput: "terminal:write-input",
-  resizeTerminal: "terminal:resize",
+  resizeExecution: "execution:resize",
+  getCommandCompletions: "shell:get-command-completions",
   getPathCompletions: "shell:get-path-completions",
   writeClipboard: "app:write-clipboard",
   getHistoryAutocomplete: "history:get-autocomplete",
@@ -62,6 +63,8 @@ export const bootstrapPayloadSchema = z.object({
 
 export const runCommandRequestSchema = z.object({
   commandText: z.string().trim().min(1),
+  cols: z.number().int().positive().max(500).optional(),
+  rows: z.number().int().positive().max(300).optional(),
 });
 
 export const runCommandResponseSchema = z.object({
@@ -78,7 +81,7 @@ export const terminalInputRequestSchema = z.object({
   data: z.string().min(1),
 });
 
-export const terminalResizeRequestSchema = z.object({
+export const executionResizeRequestSchema = z.object({
   executionId: z.string(),
   cols: z.number().int().positive().max(500),
   rows: z.number().int().positive().max(300),
@@ -108,6 +111,26 @@ export const historyRecallRequestSchema = z.object({
 export const pathCompletionRequestSchema = z.object({
   draft: z.string(),
   cwd: z.string(),
+  limit: z.number().int().positive().max(60).default(24),
+});
+
+export const commandCompletionKindSchema = z.enum([
+  "command",
+  "subcommand",
+  "option",
+  "value",
+]);
+
+export const commandCompletionSourceSchema = z.enum([
+  "fig-local",
+  "fig-public",
+  "preview",
+]);
+
+export const commandCompletionRequestSchema = z.object({
+  draft: z.string(),
+  cwd: z.string(),
+  offset: z.number().int().nonnegative().max(10_000).default(0),
   limit: z.number().int().positive().max(60).default(24),
 });
 
@@ -166,6 +189,15 @@ export const pathCompletionItemSchema = z.object({
   isDirectory: z.boolean(),
 });
 
+export const commandCompletionItemSchema = z.object({
+  nextValue: z.string(),
+  label: z.string(),
+  description: z.string().nullable(),
+  detail: z.string().nullable(),
+  kind: commandCompletionKindSchema,
+  source: commandCompletionSourceSchema,
+});
+
 export const historyAutocompleteResponseSchema = z.object({
   items: z.array(historyAutocompleteItemSchema),
 });
@@ -176,6 +208,13 @@ export const historySearchResponseSchema = z.object({
 
 export const historyRecallResponseSchema = z.object({
   items: z.array(historyRecallItemSchema),
+});
+
+export const commandCompletionResponseSchema = z.object({
+  items: z.array(commandCompletionItemSchema),
+  hasMore: z.boolean(),
+  resolvedCommand: z.boolean().default(false),
+  yieldToPath: z.boolean().default(false),
 });
 
 export const pathCompletionResponseSchema = z.object({
@@ -200,13 +239,27 @@ export const executionCompletedEventSchema = z.object({
   shellContext: shellContextSchema,
 });
 
+export const executionPresentationChangedEventSchema = z.object({
+  type: z.literal("presentation-changed"),
+  executionId: z.string(),
+  presentation: commandPresentationSchema,
+});
+
 export const executionEventSchema = z.discriminatedUnion("type", [
   executionStartedEventSchema,
   executionOutputEventSchema,
   executionCompletedEventSchema,
+  executionPresentationChangedEventSchema,
 ]);
 
 export type BootstrapPayload = z.infer<typeof bootstrapPayloadSchema>;
+export type CommandCompletionItem = z.infer<typeof commandCompletionItemSchema>;
+export type CommandCompletionRequest = z.infer<
+  typeof commandCompletionRequestSchema
+>;
+export type CommandCompletionResponse = z.infer<
+  typeof commandCompletionResponseSchema
+>;
 export type CommandExecution = z.infer<typeof commandExecutionSchema>;
 export type ExecutionEvent = z.infer<typeof executionEventSchema>;
 export type HistoryAutocompleteItem = z.infer<typeof historyAutocompleteItemSchema>;
@@ -233,4 +286,4 @@ export type RunCommandResponse = z.infer<typeof runCommandResponseSchema>;
 export type ShellContext = z.infer<typeof shellContextSchema>;
 export type ShellSurface = z.infer<typeof shellSurfaceSchema>;
 export type TerminalInputRequest = z.infer<typeof terminalInputRequestSchema>;
-export type TerminalResizeRequest = z.infer<typeof terminalResizeRequestSchema>;
+export type ExecutionResizeRequest = z.infer<typeof executionResizeRequestSchema>;

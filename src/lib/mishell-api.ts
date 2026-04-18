@@ -1,5 +1,6 @@
 import type { MishellApi } from "@shared/api";
 import type {
+  CommandCompletionItem,
   ExecutionEvent,
   HistoryAutocompleteItem,
   HistoryEntry,
@@ -7,10 +8,28 @@ import type {
   PathCompletionItem,
   RunCommandRequest,
 } from "@shared/contracts";
+import { shouldUseTerminalMode } from "@shared/terminal-mode";
 
 const previewListeners = new Set<(event: ExecutionEvent) => void>();
 const previewHistory: HistoryEntry[] = [];
 const previewPaths = ["README.md", "package.json", "src/", "electron/", "plan/"];
+const previewCommands = [
+  {
+    description: "Manage Docker containers and images",
+    name: "docker",
+    subcommands: ["build", "compose", "exec", "images", "ps", "run"],
+  },
+  {
+    description: "Fast, disk space efficient package manager",
+    name: "pnpm",
+    subcommands: ["add", "install", "run", "test", "update"],
+  },
+  {
+    description: "Native ESM-powered web dev build tool",
+    name: "vite",
+    subcommands: ["build", "optimize", "preview"],
+  },
+] as const;
 
 const browserFallback: MishellApi = {
   app: {
@@ -73,7 +92,7 @@ const browserFallback: MishellApi = {
     async runCommand(input: RunCommandRequest) {
       const executionId = `preview-${crypto.randomUUID()}`;
       const startedAt = new Date().toISOString();
-      const interactive = shouldPreviewUseTerminalMode(input.commandText);
+      const interactive = shouldUseTerminalMode(input.commandText);
 
       queueMicrotask(() => {
         previewListeners.forEach((listener) => {
@@ -178,6 +197,57 @@ const browserFallback: MishellApi = {
     async interruptExecution() {
       return;
     },
+    async getCommandCompletions(input) {
+      const normalizedDraft = input.draft.trimStart();
+      const trailingWhitespace = /\s$/.test(input.draft);
+      const tokens = normalizedDraft.split(/\s+/).filter(Boolean);
+      const currentQuery = trailingWhitespace ? "" : (tokens.at(-1) ?? "");
+
+      let items: CommandCompletionItem[] = [];
+      let hasMore = false;
+      let resolvedCommand = false;
+      let yieldToPath = false;
+
+      if (tokens.length <= 1 && currentQuery) {
+        const candidates = previewCommands
+          .filter((candidate) => candidate.name.includes(currentQuery))
+          .map((candidate) => ({
+            description: candidate.description,
+            detail: "Preview spec",
+            kind: "command" as const,
+            label: candidate.name,
+            nextValue: `${candidate.name} `,
+            source: "preview" as const,
+          }));
+
+        items = candidates.slice(input.offset, input.offset + input.limit);
+        hasMore = input.offset + items.length < candidates.length;
+      } else if (tokens.length >= 1) {
+        const rootCommand = tokens[0];
+        const matched = previewCommands.find((candidate) => candidate.name === rootCommand);
+
+        if (matched) {
+          resolvedCommand = true;
+          const candidates = matched.subcommands
+            .filter((candidate) => !currentQuery || candidate.includes(currentQuery))
+            .map((candidate) => ({
+              description: `${matched.name} ${candidate}`,
+              detail: "Preview spec",
+              kind: "subcommand" as const,
+              label: candidate,
+              nextValue: trailingWhitespace
+                ? `${input.draft}${candidate} `
+                : `${input.draft.slice(0, input.draft.length - currentQuery.length)}${candidate} `,
+              source: "preview" as const,
+            }));
+
+          items = candidates.slice(input.offset, input.offset + input.limit);
+          hasMore = input.offset + items.length < candidates.length;
+        }
+      }
+
+      return { hasMore, items, resolvedCommand, yieldToPath };
+    },
     async getPathCompletions(input) {
       const trailingWhitespace = /\s$/.test(input.draft);
       const tokenMatch = trailingWhitespace
@@ -207,7 +277,7 @@ const browserFallback: MishellApi = {
     async writeTerminalInput() {
       return;
     },
-    async resizeTerminal() {
+    async resizeExecution() {
       return;
     },
     onExecutionEvent(listener) {
@@ -332,10 +402,4 @@ const browserFallback: MishellApi = {
 
 export function getMishellApi(): MishellApi {
   return window.mishell ?? browserFallback;
-}
-
-function shouldPreviewUseTerminalMode(commandText: string) {
-  return /(^|\s)(codex|lazygit|vim|nvim|vi|less|man|ssh|tmux|top|htop|btop|nano)(\s|$)/i.test(
-    commandText,
-  );
 }

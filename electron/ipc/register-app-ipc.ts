@@ -2,7 +2,10 @@ import { clipboard, ipcMain } from "electron";
 
 import {
   bootstrapPayloadSchema,
+  commandCompletionRequestSchema,
+  commandCompletionResponseSchema,
   executionEventSchema,
+  executionResizeRequestSchema,
   historyAutocompleteRequestSchema,
   historyAutocompleteResponseSchema,
   historyRecallRequestSchema,
@@ -16,7 +19,6 @@ import {
   runCommandRequestSchema,
   runCommandResponseSchema,
   terminalInputRequestSchema,
-  terminalResizeRequestSchema,
   writeClipboardRequestSchema,
 } from "@shared/contracts";
 
@@ -50,14 +52,22 @@ export function registerAppIpc(runtime: AppRuntime) {
     runtime.execution.writeTerminalInput(terminalInputRequestSchema.parse(input));
   });
 
+  ipcMain.handle(ipcChannels.getCommandCompletions, async (_event, input) => {
+    return commandCompletionResponseSchema.parse(
+      await runtime.execution.getCommandCompletions(
+        commandCompletionRequestSchema.parse(input),
+      ),
+    );
+  });
+
   ipcMain.handle(ipcChannels.getPathCompletions, (_event, input) => {
     return pathCompletionResponseSchema.parse(
       runtime.execution.getPathCompletions(pathCompletionRequestSchema.parse(input)),
     );
   });
 
-  ipcMain.handle(ipcChannels.resizeTerminal, (_event, input) => {
-    runtime.execution.resizeTerminal(terminalResizeRequestSchema.parse(input));
+  ipcMain.handle(ipcChannels.resizeExecution, (_event, input) => {
+    runtime.execution.resizeExecution(executionResizeRequestSchema.parse(input));
   });
 
   ipcMain.handle(ipcChannels.writeClipboard, (_event, input) => {

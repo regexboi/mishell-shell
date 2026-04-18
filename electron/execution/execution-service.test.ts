@@ -5,6 +5,7 @@ import {
   getCompletionContext,
   interceptTerminalHostQueries,
   parseExecutionOutput,
+  scanForTerminalModeTrigger,
   shouldUseTerminalMode,
 } from "./execution-service";
 
@@ -48,12 +49,15 @@ describe("shouldUseTerminalMode", () => {
     expect(shouldUseTerminalMode("vim README.md")).toBe(true);
     expect(shouldUseTerminalMode("sudo lazygit")).toBe(true);
     expect(shouldUseTerminalMode("FOO=1 env BAR=2 codex")).toBe(true);
+    expect(shouldUseTerminalMode("yazi")).toBe(true);
+    expect(shouldUseTerminalMode("/opt/homebrew/bin/yazi ~/Downloads")).toBe(true);
   });
 
   it("keeps normal commands on the card path", () => {
     expect(shouldUseTerminalMode("pnpm check")).toBe(false);
     expect(shouldUseTerminalMode("git status --short")).toBe(false);
     expect(shouldUseTerminalMode("vim --help")).toBe(false);
+    expect(shouldUseTerminalMode("yazi --help")).toBe(false);
   });
 });
 
@@ -128,6 +132,42 @@ describe("interceptTerminalHostQueries", () => {
       forwardChunk: "\u001b[6nplain output",
       nextPendingBuffer: "",
       responses: [],
+    });
+  });
+});
+
+describe("scanForTerminalModeTrigger", () => {
+  it("detects alternate-screen entry in a single chunk", () => {
+    expect(
+      scanForTerminalModeTrigger({
+        chunk: "\u001b[?1049h",
+        pendingBuffer: "",
+      }),
+    ).toEqual({
+      nextPendingBuffer: "",
+      shouldPromote: true,
+    });
+  });
+
+  it("detects alternate-screen entry across split chunks", () => {
+    const firstChunk = scanForTerminalModeTrigger({
+      chunk: "\u001b[?10",
+      pendingBuffer: "",
+    });
+
+    expect(firstChunk).toEqual({
+      nextPendingBuffer: "\u001b[?10",
+      shouldPromote: false,
+    });
+
+    expect(
+      scanForTerminalModeTrigger({
+        chunk: "49h",
+        pendingBuffer: firstChunk.nextPendingBuffer,
+      }),
+    ).toEqual({
+      nextPendingBuffer: "",
+      shouldPromote: true,
     });
   });
 });

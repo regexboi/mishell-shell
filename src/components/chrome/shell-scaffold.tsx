@@ -5,6 +5,7 @@ import {
   useEffect,
   useEffectEvent,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -16,7 +17,6 @@ import {
   FolderTree,
   GitBranch,
   Search,
-  Settings,
   Square,
   Timer,
   TriangleAlert,
@@ -24,6 +24,7 @@ import {
 
 import type {
   BootstrapPayload,
+  CommandCompletionItem,
   CommandExecution,
   ExecutionEvent,
   HistoryAutocompleteItem,
@@ -40,10 +41,25 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { getMishellApi } from "@/lib/mishell-api";
+import {
+  PRESET_UI_VARS,
+  UI_THEME_VAR_KEYS,
+  colorsLooselyEqual,
+  cssColorToHex8,
+  loadThemeCustomization,
+  type MishellSurfaceId,
+  type MishellThemeId,
+  type MishellUiColorVar,
+  saveThemeCustomization,
+} from "@/lib/mishell-ui-theme";
+import {
+  buildInlineSuggestionItems,
+  getInlineSuggestionValue,
+  type InlineSuggestionItem,
+} from "@/lib/inline-suggestions";
 import { shouldRequestPathCompletions } from "@/lib/path-completion";
 import { cn } from "@/lib/utils";
 
@@ -51,8 +67,7 @@ import {
   TerminalModeSurface,
   type TerminalModeSurfaceController,
 } from "./terminal-mode-surface";
-
-type MishellThemeId = "ultraviolet" | "phosphor" | "amber";
+import { ThemeSettingsDialog } from "./theme-settings-dialog";
 
 type ThemeOption = {
   id: MishellThemeId;
@@ -82,6 +97,7 @@ type ThemeOption = {
 };
 
 const themeStorageKey = "mishell-theme";
+const COMMAND_COMPLETION_PAGE_SIZE = 24;
 const themeOptions: ThemeOption[] = [
   {
     id: "ultraviolet",
@@ -161,9 +177,41 @@ const themeOptions: ThemeOption[] = [
       yellow: "#ffd166",
     },
   },
+  {
+    id: "dark-knight",
+    label: "Dark Knight",
+    terminalTheme: {
+      background: "#000000",
+      black: "#030508",
+      blue: "#5b8cff",
+      brightBlack: "#3d4a5c",
+      brightBlue: "#8cb4ff",
+      brightCyan: "#7ed8f0",
+      brightGreen: "#7aab8a",
+      brightMagenta: "#9aa0d8",
+      brightRed: "#c87878",
+      brightWhite: "#e4eaf5",
+      brightYellow: "#c4b878",
+      cursor: "#6eb0ff",
+      cyan: "#4a9ec4",
+      foreground: "#c5cee0",
+      green: "#5a9070",
+      magenta: "#7a82b8",
+      red: "#a85858",
+      selectionBackground: "#152a48",
+      white: "#a8b4c8",
+      yellow: "#a89868",
+    },
+  },
 ];
 
 const defaultTheme = themeOptions[0];
+const CARD_OUTPUT_FONT_FAMILY =
+  '"JetBrains Mono NF", "JetBrainsMono Nerd Font Mono", "JetBrains Mono", monospace';
+const CARD_OUTPUT_FONT_SIZE_PX = 14;
+const CARD_OUTPUT_LINE_HEIGHT_PX = 24;
+const CARD_OUTPUT_HORIZONTAL_CHROME_PX = 40;
+const CARD_OUTPUT_VERTICAL_CHROME_PX = 32;
 
 type RecallSession = {
   cwd: string;
@@ -172,17 +220,82 @@ type RecallSession = {
   index: number;
 };
 
+function findNearestScrollParent(node: HTMLElement | null): HTMLElement | null {
+  let current = node?.parentElement ?? null;
+
+  while (current) {
+    const { overflowY } = window.getComputedStyle(current);
+
+    if (overflowY === "auto" || overflowY === "scroll") {
+      return current;
+    }
+
+    current = current.parentElement;
+  }
+
+  return null;
+}
+
+function clampToRange(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function measureCardExecutionSize(
+  container: HTMLElement | null,
+): { cols: number; rows: number } | null {
+  if (!container) {
+    return null;
+  }
+
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  const charSample = "0".repeat(64);
+
+  if (!context) {
+    return null;
+  }
+
+  context.font = `${CARD_OUTPUT_FONT_SIZE_PX}px ${CARD_OUTPUT_FONT_FAMILY}`;
+
+  const measuredWidth = context.measureText(charSample).width / charSample.length;
+  const charWidth = measuredWidth > 0 ? measuredWidth : 8;
+  const usableWidth = Math.max(
+    container.clientWidth - CARD_OUTPUT_HORIZONTAL_CHROME_PX,
+    charWidth * 40,
+  );
+  const usableHeight = Math.max(
+    container.clientHeight - CARD_OUTPUT_VERTICAL_CHROME_PX,
+    CARD_OUTPUT_LINE_HEIGHT_PX * 4,
+  );
+
+  return {
+    cols: clampToRange(Math.floor(usableWidth / charWidth), 40, 500),
+    rows: clampToRange(
+      Math.floor(usableHeight / CARD_OUTPUT_LINE_HEIGHT_PX),
+      4,
+      300,
+    ),
+  };
+}
+
 export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   const api = getMishellApi();
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const historySearchInputRef = useRef<HTMLInputElement | null>(null);
   const feedScrollRef = useRef<HTMLDivElement | null>(null);
+  const commandCompletionRequestRef = useRef(0);
   const autocompleteRequestRef = useRef(0);
+  const pathCompletionRequestRef = useRef(0);
   const historySearchRequestRef = useRef(0);
   const historyRecallRequestRef = useRef(0);
   const terminalControllerRef = useRef<TerminalModeSurfaceController | null>(null);
   const terminalOutputBacklogRef = useRef(new Map<string, string[]>());
   const shouldStickFeedToBottomRef = useRef(true);
+  const lastExecutionResizeRef = useRef<{
+    cols: number;
+    executionId: string;
+    rows: number;
+  } | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [shellContext, setShellContext] = useState<ShellContext>(bootstrap.shell);
   const [draft, setDraft] = useState("");
@@ -192,6 +305,12 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
   >(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [copyToast, setCopyToast] = useState<string | null>(null);
+  const [commandCompletionItems, setCommandCompletionItems] = useState<
+    CommandCompletionItem[]
+  >([]);
+  const [commandCompletionHasMore, setCommandCompletionHasMore] = useState(false);
+  const [commandCompletionLoadingMore, setCommandCompletionLoadingMore] =
+    useState(false);
   const [autocompleteItems, setAutocompleteItems] = useState<
     HistoryAutocompleteItem[]
   >([]);
@@ -223,6 +342,12 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
       return defaultTheme.id;
     }
   });
+  const [surfaceId, setSurfaceId] = useState<MishellSurfaceId>(() => {
+    return loadThemeCustomization().surface;
+  });
+  const [colorOverrides, setColorOverrides] = useState<
+    Partial<Record<MishellUiColorVar, string>>
+  >(() => loadThemeCustomization().colors);
   const deferredDraft = useDeferredValue(draft);
   const deferredHistoryQuery = useDeferredValue(historyQuery);
   const isBrowserPreview = bootstrap.platform === "browser-preview";
@@ -237,18 +362,68 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     ? executions.find((execution) => execution.id === fullOutputExecutionId) ?? null
     : null;
   const recallVisible = recallSession !== null && recallSession.items.length > 0;
-  const historyAutocompleteVisible =
-    autocompleteItems.length > 0 && recallSession === null;
-  const pathCompletionVisible =
-    pathCompletionItems.length > 0 && recallSession === null;
-  const selectedAutocomplete =
-    autocompleteIndex === null ? null : autocompleteItems[autocompleteIndex] ?? null;
-  const selectedPathCompletion =
-    autocompleteIndex === null ? null : pathCompletionItems[autocompleteIndex] ?? null;
+  const inlineSuggestionItems = useMemo(
+    () =>
+      buildInlineSuggestionItems({
+        commandCompletionItems,
+        historyAutocompleteItems: autocompleteItems,
+        pathCompletionItems,
+      }),
+    [autocompleteItems, commandCompletionItems, pathCompletionItems],
+  );
+  const inlineSuggestionsVisible =
+    inlineSuggestionItems.length > 0 && recallSession === null;
+  const hasStructuredInlineSuggestions =
+    commandCompletionItems.length > 0 || pathCompletionItems.length > 0;
+  const hasHistoryInlineSuggestions = autocompleteItems.length > 0;
+  const selectedInlineSuggestion =
+    autocompleteIndex === null ? null : inlineSuggestionItems[autocompleteIndex] ?? null;
   const selectedRecallItem =
     recallSession === null ? null : recallSession.items[recallSession.index] ?? null;
   const activeTheme =
     themeOptions.find((theme) => theme.id === themeId) ?? defaultTheme;
+
+  const mergedUiVars = useMemo(
+    () => ({ ...PRESET_UI_VARS[themeId], ...colorOverrides }),
+    [themeId, colorOverrides],
+  );
+
+  const activeTerminalTheme = useMemo(() => {
+    const base = activeTheme.terminalTheme;
+    if (Object.keys(colorOverrides).length === 0) {
+      return base;
+    }
+
+    return {
+      ...base,
+      background: cssColorToHex8(mergedUiVars.bg),
+      foreground: cssColorToHex8(mergedUiVars["text-primary"]),
+      cursor: cssColorToHex8(mergedUiVars.accent),
+      selectionBackground: cssColorToHex8(mergedUiVars["accent-dim"]),
+    };
+  }, [activeTheme, colorOverrides, mergedUiVars]);
+
+  useLayoutEffect(() => {
+    document.documentElement.dataset.mishellSurface = surfaceId;
+  }, [surfaceId]);
+
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    for (const key of UI_THEME_VAR_KEYS) {
+      root.style.removeProperty(`--${key}`);
+    }
+
+    for (const [rawKey, value] of Object.entries(colorOverrides)) {
+      const key = rawKey as MishellUiColorVar;
+      if (value && (UI_THEME_VAR_KEYS as readonly string[]).includes(key)) {
+        root.style.setProperty(`--${key}`, value);
+      }
+    }
+  }, [colorOverrides, themeId]);
+
+  useEffect(() => {
+    saveThemeCustomization({ colors: colorOverrides, surface: surfaceId });
+  }, [colorOverrides, surfaceId]);
 
   useEffect(() => {
     document.documentElement.dataset.mishellTheme = themeId;
@@ -272,10 +447,25 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     });
   });
 
+  const clearCommandCompletionState = useEffectEvent(() => {
+    setCommandCompletionItems([]);
+    setCommandCompletionHasMore(false);
+    setCommandCompletionLoadingMore(false);
+  });
+
+  const invalidateInlineSuggestionRequests = useEffectEvent(() => {
+    commandCompletionRequestRef.current += 1;
+    autocompleteRequestRef.current += 1;
+    pathCompletionRequestRef.current += 1;
+    historyRecallRequestRef.current += 1;
+  });
+
   const setDraftValue = useEffectEvent(
     (nextValue: string, source: "history" | "system" | "user" = "user") => {
       if (source === "user") {
+        invalidateInlineSuggestionRequests();
         setRecallSession(null);
+        clearCommandCompletionState();
         setPathCompletionItems([]);
         setAutocompleteIndex(null);
       }
@@ -299,6 +489,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     });
 
     setRecallSession(null);
+    clearCommandCompletionState();
     setDraftValue(commandText, "system");
     setAutocompleteItems(continuationItems);
     setPathCompletionItems([]);
@@ -306,8 +497,21 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     focusEditorAtEnd();
   });
 
+  const applyCommandCompletionSelection = useEffectEvent(
+    (item: CommandCompletionItem) => {
+      setRecallSession(null);
+      clearCommandCompletionState();
+      setPathCompletionItems([]);
+      setAutocompleteItems([]);
+      setAutocompleteIndex(null);
+      setDraftValue(item.nextValue, "system");
+      focusEditorAtEnd();
+    },
+  );
+
   const applyPathCompletionSelection = useEffectEvent((item: PathCompletionItem) => {
     setRecallSession(null);
+    clearCommandCompletionState();
     setPathCompletionItems([]);
     setAutocompleteItems([]);
     setAutocompleteIndex(null);
@@ -319,6 +523,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     setRecallSession(null);
     setDraftValue(commandText, "history");
     setHistoryOpen(false);
+    clearCommandCompletionState();
     setAutocompleteItems([]);
     setPathCompletionItems([]);
     setAutocompleteIndex(null);
@@ -370,7 +575,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         return;
       }
 
-      void api.app.resizeTerminal({
+      void api.app.resizeExecution({
         executionId: activeTerminalExecutionId,
         cols,
         rows,
@@ -387,6 +592,33 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
       }
 
       setExecutions((current) => [event.execution, ...current]);
+      return;
+    }
+
+    if (event.type === "presentation-changed") {
+      if (event.presentation === "terminal") {
+        terminalOutputBacklogRef.current.set(event.executionId, [
+          TERMINAL_SESSION_RESET,
+        ]);
+        setActiveTerminalExecutionId(event.executionId);
+      }
+
+      setExecutions((current) =>
+        current.map((execution) =>
+          execution.id === event.executionId
+            ? {
+                ...execution,
+                presentation: event.presentation,
+                output:
+                  event.presentation === "terminal"
+                    ? "Terminal mode attached. Focus the compatibility surface and use Ctrl+C when the active program accepts it."
+                    : execution.output,
+                outputPreview:
+                  event.presentation === "terminal" ? "" : execution.outputPreview,
+              }
+            : execution,
+        ),
+      );
       return;
     }
 
@@ -689,6 +921,76 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     feed.scrollTop = feed.scrollHeight;
   }, [executions]);
 
+  useEffect(() => {
+    if (
+      !runningExecution ||
+      runningExecution.presentation !== "card" ||
+      activeTerminalExecutionId
+    ) {
+      lastExecutionResizeRef.current = null;
+      return;
+    }
+
+    const feed = feedScrollRef.current;
+
+    if (!feed) {
+      return;
+    }
+
+    let frame = 0;
+    const sendResize = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const size = measureCardExecutionSize(feedScrollRef.current);
+
+        if (!size) {
+          return;
+        }
+
+        const lastResize = lastExecutionResizeRef.current;
+
+        if (
+          lastResize &&
+          lastResize.executionId === runningExecution.id &&
+          lastResize.cols === size.cols &&
+          lastResize.rows === size.rows
+        ) {
+          return;
+        }
+
+        lastExecutionResizeRef.current = {
+          executionId: runningExecution.id,
+          ...size,
+        };
+
+        void api.app.resizeExecution({
+          executionId: runningExecution.id,
+          cols: size.cols,
+          rows: size.rows,
+        });
+      });
+    };
+
+    const resizeObserver = new ResizeObserver(() => {
+      sendResize();
+    });
+
+    resizeObserver.observe(feed);
+    sendResize();
+    window.addEventListener("resize", sendResize);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", sendResize);
+      resizeObserver.disconnect();
+    };
+  }, [
+    api,
+    activeTerminalExecutionId,
+    runningExecution?.id,
+    runningExecution?.presentation,
+  ]);
+
   const submitCommand = useEffectEvent(async () => {
     const commandText = draft.trim();
 
@@ -698,6 +1000,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
 
     setIsSubmitting(true);
     setRecallSession(null);
+    clearCommandCompletionState();
     setAutocompleteItems([]);
     setPathCompletionItems([]);
     setAutocompleteIndex(null);
@@ -706,7 +1009,11 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     let responseMode: "card" | "terminal" | null = null;
 
     try {
-      const response = await api.app.runCommand({ commandText });
+      const cardExecutionSize = measureCardExecutionSize(feedScrollRef.current);
+      const response = await api.app.runCommand({
+        commandText,
+        ...cardExecutionSize,
+      });
       responseMode = response.mode;
 
       if (response.mode === "terminal") {
@@ -745,18 +1052,18 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     }
   });
 
-  const navigateAutocomplete = useEffectEvent((direction: "next" | "prev") => {
-    if (!historyAutocompleteVisible) {
+  const navigateInlineSuggestions = useEffectEvent((direction: "next" | "prev") => {
+    if (!inlineSuggestionsVisible) {
       return false;
     }
 
     setAutocompleteIndex((current) => {
-      if (autocompleteItems.length === 0) {
+      if (inlineSuggestionItems.length === 0) {
         return null;
       }
 
       if (current === null) {
-        return direction === "next" ? 0 : autocompleteItems.length - 1;
+        return direction === "next" ? 0 : inlineSuggestionItems.length - 1;
       }
 
       if (direction === "prev") {
@@ -764,38 +1071,11 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
       }
 
       const nextIndex = current + 1;
-      return clampIndex(nextIndex, autocompleteItems.length);
+      return clampIndex(nextIndex, inlineSuggestionItems.length);
     });
 
     return true;
   });
-
-  const navigatePathCompletions = useEffectEvent(
-    (direction: "next" | "prev") => {
-      if (!pathCompletionVisible) {
-        return false;
-      }
-
-      setAutocompleteIndex((current) => {
-        if (pathCompletionItems.length === 0) {
-          return null;
-        }
-
-        if (current === null) {
-          return direction === "next" ? 0 : pathCompletionItems.length - 1;
-        }
-
-        if (direction === "prev") {
-          return current <= 0 ? null : current - 1;
-        }
-
-        const nextIndex = current + 1;
-        return clampIndex(nextIndex, pathCompletionItems.length);
-      });
-
-      return true;
-    },
-  );
 
   const requestAutocomplete = useEffectEvent(async () => {
     const normalizedDraft = draft.trim();
@@ -822,7 +1102,6 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
 
       startTransition(() => {
         setAutocompleteItems(response.items);
-        setPathCompletionItems([]);
         setAutocompleteIndex(null);
       });
 
@@ -838,23 +1117,128 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     }
   });
 
-  const requestPathCompletions = useEffectEvent(async () => {
-    const response = await api.app.getPathCompletions({
-      draft,
-      cwd: shellContext.cwd,
-      limit: 24,
-    });
+  const requestCommandCompletions = useEffectEvent(async () => {
+    const requestId = commandCompletionRequestRef.current + 1;
+    commandCompletionRequestRef.current = requestId;
+    setCommandCompletionLoadingMore(false);
 
-    startTransition(() => {
-      setPathCompletionItems(response.items);
+    try {
+      const response = await api.app.getCommandCompletions({
+        draft,
+        cwd: shellContext.cwd,
+        limit: COMMAND_COMPLETION_PAGE_SIZE,
+        offset: 0,
+      });
+
+      if (commandCompletionRequestRef.current !== requestId) {
+        return {
+          found: false,
+          resolvedCommand: false,
+          yieldToPath: false,
+        };
+      }
+
+      startTransition(() => {
+        setCommandCompletionItems(response.items);
+        setCommandCompletionHasMore(response.hasMore);
+        setPathCompletionItems([]);
+        setAutocompleteIndex(null);
+      });
+
+      return {
+        found: response.items.length > 0,
+        resolvedCommand: response.resolvedCommand,
+        yieldToPath: response.yieldToPath,
+      };
+    } catch {
+      if (commandCompletionRequestRef.current !== requestId) {
+        return {
+          found: false,
+          resolvedCommand: false,
+          yieldToPath: false,
+        };
+      }
+
+      clearCommandCompletionState();
       setAutocompleteIndex(null);
-    });
-
-    return response.items.length > 0;
+      return {
+        found: false,
+        resolvedCommand: false,
+        yieldToPath: false,
+      };
+    }
   });
+
+  const requestMoreCommandCompletions = useEffectEvent(async () => {
+    if (
+      commandCompletionLoadingMore ||
+      !commandCompletionHasMore ||
+      commandCompletionItems.length === 0
+    ) {
+      return;
+    }
+
+    const requestId = commandCompletionRequestRef.current;
+    setCommandCompletionLoadingMore(true);
+
+    try {
+      const response = await api.app.getCommandCompletions({
+        draft,
+        cwd: shellContext.cwd,
+        limit: COMMAND_COMPLETION_PAGE_SIZE,
+        offset: commandCompletionItems.length,
+      });
+
+      if (commandCompletionRequestRef.current !== requestId) {
+        return;
+      }
+
+      setCommandCompletionItems((currentItems) =>
+        mergeCommandCompletionItems(currentItems, response.items),
+      );
+      setCommandCompletionHasMore(response.hasMore);
+      setCommandCompletionLoadingMore(false);
+    } catch {
+      if (commandCompletionRequestRef.current !== requestId) {
+        return;
+      }
+
+      setCommandCompletionLoadingMore(false);
+    }
+  });
+
+  const requestPathCompletions = useEffectEvent(
+    async ({ mergeIntoCommandCompletions = false } = {}) => {
+      const requestId = pathCompletionRequestRef.current + 1;
+      pathCompletionRequestRef.current = requestId;
+
+      const response = await api.app.getPathCompletions({
+        draft,
+        cwd: shellContext.cwd,
+        limit: 24,
+      });
+
+      if (pathCompletionRequestRef.current !== requestId) {
+        return false;
+      }
+
+      startTransition(() => {
+        if (mergeIntoCommandCompletions) {
+          setPathCompletionItems(response.items);
+        } else {
+          clearCommandCompletionState();
+          setPathCompletionItems(response.items);
+        }
+        setAutocompleteIndex(null);
+      });
+
+      return response.items.length > 0;
+    },
+  );
 
   const clearEditorDraft = useEffectEvent(() => {
     setRecallSession(null);
+    clearCommandCompletionState();
     setAutocompleteItems([]);
     setPathCompletionItems([]);
     setAutocompleteIndex(null);
@@ -862,22 +1246,83 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     focusEditorAtEnd();
   });
 
-  const acceptAutocomplete = useEffectEvent(() => {
-    if (!selectedAutocomplete) {
+  const closeInlineSuggestions = useEffectEvent(() => {
+    invalidateInlineSuggestionRequests();
+    setRecallSession(null);
+    clearCommandCompletionState();
+    setAutocompleteItems([]);
+    setPathCompletionItems([]);
+    setAutocompleteIndex(null);
+  });
+
+  const acceptInlineSuggestion = useEffectEvent(() => {
+    if (!selectedInlineSuggestion) {
       return false;
     }
 
-    applyAutocompleteSelection(selectedAutocomplete.commandText);
+    if (selectedInlineSuggestion.type === "command") {
+      applyCommandCompletionSelection(selectedInlineSuggestion.item);
+      return true;
+    }
+
+    if (selectedInlineSuggestion.type === "path") {
+      applyPathCompletionSelection(selectedInlineSuggestion.item);
+      return true;
+    }
+
+    applyAutocompleteSelection(selectedInlineSuggestion.item.commandText);
     return true;
   });
 
-  const acceptPathCompletion = useEffectEvent(() => {
-    if (!selectedPathCompletion) {
+  const cycleInlineSuggestions = useEffectEvent(() => {
+    if (!inlineSuggestionsVisible) {
       return false;
     }
 
-    applyPathCompletionSelection(selectedPathCompletion);
-    return true;
+    if (autocompleteIndex === null) {
+      navigateInlineSuggestions("next");
+      return true;
+    }
+
+    if (
+      selectedInlineSuggestion &&
+      getInlineSuggestionValue(selectedInlineSuggestion) === draft.trim() &&
+      inlineSuggestionItems.length > 1
+    ) {
+      navigateInlineSuggestions("next");
+      return true;
+    }
+
+    return acceptInlineSuggestion();
+  });
+
+  const requestInlineSuggestions = useEffectEvent(async () => {
+    const [commandCompletionResult, didFindHistory] = await Promise.all([
+      requestCommandCompletions(),
+      requestAutocomplete(),
+    ]);
+
+    let didFindPath = false;
+
+    if (commandCompletionResult.yieldToPath) {
+      didFindPath = await requestPathCompletions({
+        mergeIntoCommandCompletions: commandCompletionResult.found,
+      });
+    } else if (!commandCompletionResult.found && !commandCompletionResult.resolvedCommand) {
+      const pathPreferred =
+        shouldRequestPathCompletions(draft) || !didFindHistory;
+
+      if (pathPreferred) {
+        didFindPath = await requestPathCompletions();
+      }
+    }
+
+    return {
+      found:
+        commandCompletionResult.found || didFindHistory || didFindPath,
+      hasStructured:
+        commandCompletionResult.found || didFindPath,
+    };
   });
 
   const acceptRecallSelection = useEffectEvent(() => {
@@ -886,6 +1331,10 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     }
 
     setRecallSession(null);
+    clearCommandCompletionState();
+    setPathCompletionItems([]);
+    setAutocompleteItems([]);
+    setAutocompleteIndex(null);
     setDraftValue(selectedRecallItem.commandText, "system");
     focusEditorAtEnd();
     return true;
@@ -893,6 +1342,10 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
 
   const applyRecallResult = useEffectEvent((commandText: string) => {
     setRecallSession(null);
+    clearCommandCompletionState();
+    setPathCompletionItems([]);
+    setAutocompleteItems([]);
+    setAutocompleteIndex(null);
     setDraftValue(commandText, "system");
     focusEditorAtEnd();
   });
@@ -929,8 +1382,8 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         setRecallSession({
           cwd: shellContext.cwd,
           originalDraft: draft,
-          items,
-          index: 0,
+          items: [...items].reverse(),
+          index: items.length - 1,
         });
         return;
       }
@@ -938,12 +1391,12 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
       if (direction === "back") {
         setRecallSession({
           ...activeSession,
-          index: Math.min(activeSession.index + 1, activeSession.items.length - 1),
+          index: Math.max(activeSession.index - 1, 0),
         });
         return;
       }
 
-      if (activeSession.index <= 0) {
+      if (activeSession.index >= activeSession.items.length - 1) {
         setRecallSession(null);
         setDraftValue(activeSession.originalDraft, "system");
         focusEditorAtEnd();
@@ -952,7 +1405,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
 
       setRecallSession({
         ...activeSession,
-        index: activeSession.index - 1,
+        index: activeSession.index + 1,
       });
     },
   );
@@ -988,6 +1441,19 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
       }
 
       if (
+        event.key === "Escape" &&
+        !event.shiftKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        (recallVisible || inlineSuggestionsVisible)
+      ) {
+        event.preventDefault();
+        closeInlineSuggestions();
+        return true;
+      }
+
+      if (
         event.key === "Enter" &&
         !event.shiftKey &&
         !event.metaKey &&
@@ -1007,25 +1473,11 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         !event.metaKey &&
         !event.ctrlKey &&
         !event.altKey &&
-        pathCompletionVisible &&
+        inlineSuggestionsVisible &&
         autocompleteIndex !== null
       ) {
         event.preventDefault();
-        acceptPathCompletion();
-        return true;
-      }
-
-      if (
-        event.key === "Enter" &&
-        !event.shiftKey &&
-        !event.metaKey &&
-        !event.ctrlKey &&
-        !event.altKey &&
-        historyAutocompleteVisible &&
-        autocompleteIndex !== null
-      ) {
-        event.preventDefault();
-        acceptAutocomplete();
+        acceptInlineSuggestion();
         return true;
       }
 
@@ -1048,23 +1500,10 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         !event.metaKey &&
         !event.ctrlKey &&
         !event.altKey &&
-        pathCompletionVisible
+        inlineSuggestionsVisible
       ) {
         event.preventDefault();
-        navigatePathCompletions("next");
-        return true;
-      }
-
-      if (
-        event.key === "ArrowDown" &&
-        !event.shiftKey &&
-        !event.metaKey &&
-        !event.ctrlKey &&
-        !event.altKey &&
-        historyAutocompleteVisible
-      ) {
-        event.preventDefault();
-        navigateAutocomplete("next");
+        navigateInlineSuggestions("next");
         return true;
       }
 
@@ -1076,49 +1515,23 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         !event.altKey
       ) {
         event.preventDefault();
-        const pathPreferred = shouldRequestPathCompletions(draft);
+        if (inlineSuggestionsVisible) {
+          if (!hasStructuredInlineSuggestions && hasHistoryInlineSuggestions) {
+            void requestInlineSuggestions().then((result) => {
+              if (result.hasStructured) {
+                return;
+              }
 
-        if (pathPreferred) {
-          if (pathCompletionVisible) {
-            navigatePathCompletions("next");
+              cycleInlineSuggestions();
+            });
             return true;
           }
 
-          void requestPathCompletions();
+          cycleInlineSuggestions();
           return true;
         }
 
-        if (pathCompletionVisible) {
-          navigatePathCompletions("next");
-          return true;
-        }
-
-        if (historyAutocompleteVisible) {
-          if (autocompleteIndex === null) {
-            navigateAutocomplete("next");
-            return true;
-          }
-
-          if (
-            selectedAutocomplete &&
-            selectedAutocomplete.commandText.trim() === draft.trim() &&
-            autocompleteItems.length > 1
-          ) {
-            navigateAutocomplete("next");
-            return true;
-          }
-
-          acceptAutocomplete();
-          return true;
-        }
-
-        void requestAutocomplete().then((didFindHistory) => {
-          if (didFindHistory) {
-            return;
-          }
-
-          void requestPathCompletions();
-        });
+        void requestInlineSuggestions();
         return true;
       }
 
@@ -1128,25 +1541,11 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         !event.metaKey &&
         !event.ctrlKey &&
         !event.altKey &&
-        pathCompletionVisible &&
+        inlineSuggestionsVisible &&
         autocompleteIndex !== null
       ) {
         event.preventDefault();
-        navigatePathCompletions("prev");
-        return true;
-      }
-
-      if (
-        event.key === "ArrowUp" &&
-        !event.shiftKey &&
-        !event.metaKey &&
-        !event.ctrlKey &&
-        !event.altKey &&
-        historyAutocompleteVisible &&
-        autocompleteIndex !== null
-      ) {
-        event.preventDefault();
-        navigateAutocomplete("prev");
+        navigateInlineSuggestions("prev");
         return true;
       }
 
@@ -1183,10 +1582,19 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     WebkitAppRegion: "no-drag",
   } as CSSProperties;
 
+  const showAmbientGlow =
+    surfaceId === "studio" || surfaceId === "aurora" || surfaceId === "depth";
+  const showTechGrid =
+    surfaceId === "studio" || surfaceId === "lattice" || surfaceId === "depth";
+
   return (
     <div className="relative flex h-dvh max-h-dvh flex-col overflow-hidden bg-[color:var(--bg)] text-[color:var(--text-primary)]">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,var(--glow-primary),transparent_30%),radial-gradient(circle_at_bottom_right,var(--glow-secondary),transparent_34%)]" />
-      <div className="pointer-events-none absolute inset-0 opacity-40 [background-image:linear-gradient(var(--grid-line)_1px,transparent_1px),linear-gradient(90deg,var(--grid-line)_1px,transparent_1px)] [background-size:32px_32px]" />
+      {showAmbientGlow ? (
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,var(--glow-primary),transparent_30%),radial-gradient(circle_at_bottom_right,var(--glow-secondary),transparent_34%)]" />
+      ) : null}
+      {showTechGrid ? (
+        <div className="pointer-events-none absolute inset-0 opacity-40 [background-image:linear-gradient(var(--grid-line)_1px,transparent_1px),linear-gradient(90deg,var(--grid-line)_1px,transparent_1px)] [background-size:32px_32px]" />
+      ) : null}
       <div className="relative flex min-h-0 w-full flex-1 flex-col">
         <div
           className={cn(
@@ -1195,56 +1603,35 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
           )}
           style={titleBarStyle}
         >
-          <Dialog>
-            <DialogTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-7 w-7 shrink-0 px-0 text-[color:var(--text-muted)] hover:text-[color:var(--accent)]"
-                style={titleBarControlStyle}
-                aria-label="Settings"
-              >
-                <Settings className="h-4 w-4" strokeWidth={1.75} />
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="w-[min(92vw,272px)] gap-0 p-0">
-              <DialogHeader className="border-0 px-5 pb-0 pt-5">
-                <DialogTitle className="font-mono text-[10px] font-medium uppercase tracking-[0.22em] text-[color:var(--text-muted)]">
-                  Theme
-                </DialogTitle>
-                <DialogDescription className="sr-only">
-                  Choose a color theme for Mishell.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="flex flex-col gap-1 px-3 pb-5 pt-4">
-                {themeOptions.map((theme) => (
-                  <button
-                    key={theme.id}
-                    type="button"
-                    onClick={() => {
-                      setThemeId(theme.id);
-                    }}
-                    className={cn(
-                      "flex items-center gap-3 border px-3 py-2.5 text-left transition-colors",
-                      theme.id === activeTheme.id
-                        ? "border-[color:var(--accent)] bg-[color:color-mix(in_srgb,var(--accent)_10%,transparent)]"
-                        : "border-[color:var(--border)] bg-transparent hover:border-[color:var(--border-strong)]",
-                    )}
-                  >
-                    <span
-                      className="h-3.5 w-3.5 shrink-0 border border-[color:var(--border-strong)]"
-                      style={{ background: theme.terminalTheme.magenta }}
-                      aria-hidden
-                    />
-                    <span className="font-mono text-xs uppercase tracking-[0.14em] text-[color:var(--text-primary)]">
-                      {theme.label}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </DialogContent>
-          </Dialog>
+          <ThemeSettingsDialog
+            themeId={themeId}
+            themeOptions={themeOptions}
+            surfaceId={surfaceId}
+            colorOverrides={colorOverrides}
+            triggerStyle={titleBarControlStyle}
+            onSelectPreset={(nextId) => {
+              setThemeId(nextId);
+              setColorOverrides({});
+            }}
+            onSurfaceChange={(nextSurface) => {
+              setSurfaceId(nextSurface);
+            }}
+            onColorChange={(token, value) => {
+              setColorOverrides((previous) => {
+                const next = { ...previous };
+                const presetValue = PRESET_UI_VARS[themeId][token];
+                if (colorsLooselyEqual(value, presetValue)) {
+                  delete next[token];
+                } else {
+                  next[token] = value;
+                }
+                return next;
+              });
+            }}
+            onResetColors={() => {
+              setColorOverrides({});
+            }}
+          />
           <div className="min-h-0 min-w-0 flex-1" aria-hidden />
         </div>
 
@@ -1270,7 +1657,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                   onInput={handleTerminalInput}
                   onReady={handleTerminalReady}
                   onResize={handleTerminalResize}
-                  theme={activeTheme.terminalTheme}
+                  theme={activeTerminalTheme}
                 />
               </section>
             ) : (
@@ -1286,69 +1673,66 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                       shouldStickFeedToBottomRef.current = distanceFromBottom <= 48;
                     }}
                   >
-                    {executions.length === 0 ? (
-                      <div className="border border-dashed border-[color:var(--border)] bg-[color:var(--panel-muted)] px-5 py-6 text-sm text-[color:var(--text-secondary)]">
-                        Run a command to create the first card. Good smoke checks
-                        are `pwd`, `git status --short`, a failing command like
-                        `false`, and `vim README.md` to confirm terminal-mode
-                        fallback.
+                    <div className="flex min-h-full min-w-0 flex-col justify-end">
+                      <div className="flex min-w-0 flex-col divide-y divide-[color:var(--border)]">
+                        {feedExecutions.map((execution) => (
+                          <CommandCard
+                            key={execution.id}
+                            execution={execution}
+                            onInterrupt={
+                              execution.status === "running"
+                                ? () => {
+                                    void interruptExecution(execution.id);
+                                  }
+                                : undefined
+                            }
+                            onCopyCommand={() => {
+                              void copyText(execution.commandText, "Command");
+                            }}
+                            onCopyOutput={() => {
+                              void copyText(execution.output, "Output");
+                            }}
+                            onCopyBoth={() => {
+                              void copyText(
+                                `cmd: ${execution.commandText}\nout: ${execution.output}`,
+                                "Command + output",
+                              );
+                            }}
+                            onOpenFullOutput={() => {
+                              setFullOutputExecutionId(execution.id);
+                            }}
+                          />
+                        ))}
                       </div>
-                    ) : (
-                      <div className="flex min-h-full min-w-0 flex-col justify-end">
-                        <div className="flex min-w-0 flex-col divide-y divide-[color:var(--border)]">
-                          {feedExecutions.map((execution) => (
-                            <CommandCard
-                              key={execution.id}
-                              execution={execution}
-                              onInterrupt={
-                                execution.status === "running"
-                                  ? () => {
-                                      void interruptExecution(execution.id);
-                                    }
-                                  : undefined
-                              }
-                              onCopyCommand={() => {
-                                void copyText(execution.commandText, "Command");
-                              }}
-                              onCopyOutput={() => {
-                                void copyText(execution.output, "Output");
-                              }}
-                              onCopyBoth={() => {
-                                void copyText(
-                                  `cmd: ${execution.commandText}\nout: ${execution.output}`,
-                                  "Command + output",
-                                );
-                              }}
-                              onOpenFullOutput={() => {
-                                setFullOutputExecutionId(execution.id);
-                              }}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    )}
+                    </div>
                   </div>
                 </section>
 
                 <section className="shrink-0">
-                  <div className="border border-[color:var(--border-strong)] bg-[linear-gradient(180deg,rgba(18,18,25,0.82),rgba(10,10,16,0.96))]">
+                  <div className="border border-[color:var(--border-strong)] bg-[linear-gradient(180deg,color-mix(in_srgb,var(--panel-strong)_72%,var(--bg)),color-mix(in_srgb,var(--panel-muted)_85%,var(--bg)))]">
                     <ShellHeader
                       shellContext={shellContext}
                       latestExecution={latestExecution}
                     />
                     <ShellEditor
-                      autocompleteItems={autocompleteItems}
-                      historyVisible={historyAutocompleteVisible}
+                      commandSuggestionCount={commandCompletionItems.length}
+                      commandHasMore={commandCompletionHasMore}
+                      commandLoadingMore={commandCompletionLoadingMore}
+                      historySuggestionCount={autocompleteItems.length}
+                      inlineSuggestionItems={inlineSuggestionItems}
                       onHighlightIndex={setAutocompleteIndex}
                       onHighlightRecallIndex={hoverRecallHistory}
+                      onLoadMoreCommandCompletions={() => {
+                        void requestMoreCommandCompletions();
+                      }}
                       onSelectRecallCommand={applyRecallResult}
                       recallItems={recallSession?.items ?? []}
                       recallVisible={recallVisible}
                       selectedRecallItem={selectedRecallItem}
+                      onSelectCommandCompletion={applyCommandCompletionSelection}
                       onSelectAutocomplete={applyAutocompleteSelection}
                       onSelectPathCompletion={applyPathCompletionSelection}
-                      pathCompletionItems={pathCompletionItems}
-                      pathVisible={pathCompletionVisible}
+                      pathSuggestionCount={pathCompletionItems.length}
                       selectedIndex={autocompleteIndex}
                       ref={editorRef}
                       value={draft}
@@ -1452,22 +1836,26 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
 }
 
 type ShellEditorProps = {
-  autocompleteItems: HistoryAutocompleteItem[];
-  historyVisible: boolean;
+  commandSuggestionCount: number;
+  commandHasMore: boolean;
+  commandLoadingMore: boolean;
+  historySuggestionCount: number;
+  inlineSuggestionItems: InlineSuggestionItem[];
   onHighlightIndex: (index: number | null) => void;
   onHighlightRecallIndex: (index: number) => void;
+  onLoadMoreCommandCompletions: () => void;
   recallItems: HistoryRecallItem[];
   recallVisible: boolean;
   onSelectRecallCommand: (commandText: string) => void;
   selectedRecallItem: HistoryRecallItem | null;
   value: string;
+  onSelectCommandCompletion: (item: CommandCompletionItem) => void;
   onSelectAutocomplete: (commandText: string) => void;
   onSelectPathCompletion: (item: PathCompletionItem) => void;
   disabled: boolean;
   onChange: (value: string) => void;
   onKeyDown?: (event: React.KeyboardEvent<HTMLTextAreaElement>) => boolean | void;
-  pathCompletionItems: PathCompletionItem[];
-  pathVisible: boolean;
+  pathSuggestionCount: number;
   selectedIndex: number | null;
   onSubmit: () => void;
 };
@@ -1490,22 +1878,26 @@ const EDITOR_MAX_HEIGHT =
 const TERMINAL_SESSION_RESET = "\u001bc\u001b[3J\u001b[2J\u001b[H";
 
 const ShellEditor = ({
-  autocompleteItems,
-  historyVisible,
+  commandSuggestionCount,
+  commandHasMore,
+  commandLoadingMore,
+  historySuggestionCount,
+  inlineSuggestionItems,
   onHighlightIndex,
   onHighlightRecallIndex,
+  onLoadMoreCommandCompletions,
   onSelectRecallCommand,
   recallItems,
   recallVisible,
   selectedRecallItem,
   value,
+  onSelectCommandCompletion,
   onSelectAutocomplete,
   onSelectPathCompletion,
   disabled,
   onChange,
   onKeyDown,
-  pathCompletionItems,
-  pathVisible,
+  pathSuggestionCount,
   selectedIndex,
   onSubmit,
   ref,
@@ -1533,7 +1925,8 @@ const ShellEditor = ({
   }, [value, disabled, ref]);
 
   const scrollEditor = editorHeight >= EDITOR_MAX_HEIGHT;
-  const suggestionVisible = pathVisible || historyVisible || recallVisible;
+  const suggestionVisible =
+    inlineSuggestionItems.length > 0 || recallVisible;
 
   useLayoutEffect(() => {
     const textarea = ref.current;
@@ -1547,8 +1940,7 @@ const ShellEditor = ({
     setFloatingAnchor(getFloatingSuggestionAnchor(textarea, container));
   }, [
     editorHeight,
-    historyVisible,
-    pathVisible,
+    inlineSuggestionItems.length,
     recallVisible,
     ref,
     selectedIndex,
@@ -1641,15 +2033,19 @@ const ShellEditor = ({
       {suggestionVisible && floatingAnchor ? (
         <FloatingSuggestionDropdown
           anchor={floatingAnchor}
-          autocompleteItems={autocompleteItems}
-          historyVisible={historyVisible}
+          commandSuggestionCount={commandSuggestionCount}
+          commandHasMore={commandHasMore}
+          commandLoadingMore={commandLoadingMore}
+          historySuggestionCount={historySuggestionCount}
+          inlineSuggestionItems={inlineSuggestionItems}
           onHighlightIndex={onHighlightIndex}
           onHighlightRecallIndex={onHighlightRecallIndex}
+          onLoadMoreCommandCompletions={onLoadMoreCommandCompletions}
           onSelectRecallCommand={onSelectRecallCommand}
+          onSelectCommandCompletion={onSelectCommandCompletion}
           onSelectAutocomplete={onSelectAutocomplete}
           onSelectPathCompletion={onSelectPathCompletion}
-          pathCompletionItems={pathCompletionItems}
-          pathVisible={pathVisible}
+          pathSuggestionCount={pathSuggestionCount}
           recallItems={recallItems}
           recallVisible={recallVisible}
           selectedIndex={selectedIndex}
@@ -1713,7 +2109,71 @@ function CommandCard({
         (isTerminalPresentation
           ? "Terminal mode is active in the compatibility surface."
           : "Waiting for output…")
-      : execution.outputPreview || "No output captured.";
+      : execution.output;
+  const hasVisibleOutput =
+    execution.status === "running"
+      ? Boolean(execution.output.trim())
+      : Boolean(execution.output.trim());
+  const outputViewportRef = useRef<HTMLDivElement | null>(null);
+  const outputScrollerRef = useRef<HTMLDivElement | null>(null);
+  const shouldStickOutputToBottomRef = useRef(true);
+  const [outputMaxHeight, setOutputMaxHeight] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    const viewport = outputViewportRef.current;
+
+    if (!viewport) {
+      return;
+    }
+
+    const scrollParent = findNearestScrollParent(viewport);
+    let frame = 0;
+
+    const updateOutputMaxHeight = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        if (!outputViewportRef.current) {
+          return;
+        }
+
+        const rect = outputViewportRef.current.getBoundingClientRect();
+        const viewportBottom = window.innerHeight - 16;
+        const scrollParentBottom = scrollParent
+          ? scrollParent.getBoundingClientRect().bottom - 16
+          : viewportBottom;
+        const nextMaxHeight = Math.max(
+          160,
+          Math.floor(Math.min(viewportBottom, scrollParentBottom) - rect.top),
+        );
+
+        setOutputMaxHeight((current) =>
+          current === nextMaxHeight ? current : nextMaxHeight,
+        );
+      });
+    };
+
+    updateOutputMaxHeight();
+    window.addEventListener("resize", updateOutputMaxHeight);
+    scrollParent?.addEventListener("scroll", updateOutputMaxHeight, {
+      passive: true,
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", updateOutputMaxHeight);
+      scrollParent?.removeEventListener("scroll", updateOutputMaxHeight);
+    };
+  }, [execution.id]);
+
+  useLayoutEffect(() => {
+    const scroller = outputScrollerRef.current;
+
+    if (!scroller || !shouldStickOutputToBottomRef.current) {
+      return;
+    }
+
+    scroller.scrollTop = scroller.scrollHeight;
+  }, [displayOutput, outputMaxHeight]);
 
   return (
     <article className="w-full min-w-0 py-5">
@@ -1730,7 +2190,39 @@ function CommandCard({
             {isTerminalPresentation ? <span>terminal mode</span> : null}
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={onCopyCommand}>
+              <Clipboard className="h-3.5 w-3.5" />
+              Copy command
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!execution.output || isTerminalPresentation}
+              onClick={onCopyOutput}
+            >
+              <Clipboard className="h-3.5 w-3.5" />
+              Copy output
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!execution.output || isTerminalPresentation}
+              onClick={onCopyBoth}
+            >
+              <Clipboard className="h-3.5 w-3.5" />
+              Copy both
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!execution.output || isTerminalPresentation}
+              onClick={onOpenFullOutput}
+            >
+              Full output
+            </Button>
+          </div>
           {execution.status === "running" && onInterrupt ? (
             <Button
               variant="ghost"
@@ -1746,86 +2238,103 @@ function CommandCard({
         </div>
       </div>
 
-      <div className="mt-4 border border-[color:var(--border)] bg-black/20">
-        <pre className="mishell-overlay-scroll m-0 max-h-48 overflow-auto whitespace-pre-wrap px-4 py-4 font-mono text-sm leading-6 text-[color:var(--text-secondary)]">
-          {displayOutput}
-        </pre>
-      </div>
+      {hasVisibleOutput ? (
+        <div
+          ref={outputViewportRef}
+          className="mt-4 border border-[color:var(--border)] bg-black/20"
+        >
+          <div
+            ref={outputScrollerRef}
+            className="mishell-overlay-scroll overflow-auto"
+            style={outputMaxHeight ? { maxHeight: `${outputMaxHeight}px` } : undefined}
+            onScroll={(event) => {
+              const node = event.currentTarget;
+              const distanceFromBottom =
+                node.scrollHeight - node.clientHeight - node.scrollTop;
 
-      <div className="mt-4 flex flex-wrap gap-2">
-        <Button variant="ghost" size="sm" onClick={onCopyCommand}>
-          <Clipboard className="h-3.5 w-3.5" />
-          Copy command
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={!execution.output || isTerminalPresentation}
-          onClick={onCopyOutput}
-        >
-          <Clipboard className="h-3.5 w-3.5" />
-          Copy output
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={!execution.output || isTerminalPresentation}
-          onClick={onCopyBoth}
-        >
-          <Clipboard className="h-3.5 w-3.5" />
-          Copy both
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={!execution.output || isTerminalPresentation}
-          onClick={onOpenFullOutput}
-        >
-          Full output
-        </Button>
-      </div>
+              shouldStickOutputToBottomRef.current = distanceFromBottom <= 32;
+            }}
+          >
+            <pre className="m-0 min-w-max whitespace-pre px-4 py-4 font-mono text-sm leading-6 text-[color:var(--text-secondary)]">
+              {displayOutput}
+            </pre>
+          </div>
+        </div>
+      ) : null}
     </article>
   );
 }
 
 function FloatingSuggestionDropdown({
   anchor,
-  autocompleteItems,
-  historyVisible,
+  commandSuggestionCount,
+  commandHasMore,
+  commandLoadingMore,
+  historySuggestionCount,
+  inlineSuggestionItems,
   onHighlightIndex,
   onHighlightRecallIndex,
+  onLoadMoreCommandCompletions,
+  onSelectCommandCompletion,
   onSelectRecallCommand,
   onSelectAutocomplete,
   onSelectPathCompletion,
-  pathCompletionItems,
-  pathVisible,
+  pathSuggestionCount,
   recallItems,
   recallVisible,
   selectedIndex,
   selectedRecallItem,
 }: {
   anchor: FloatingSuggestionAnchor;
-  autocompleteItems: HistoryAutocompleteItem[];
-  historyVisible: boolean;
+  commandSuggestionCount: number;
+  commandHasMore: boolean;
+  commandLoadingMore: boolean;
+  historySuggestionCount: number;
+  inlineSuggestionItems: InlineSuggestionItem[];
   onHighlightIndex: (index: number | null) => void;
   onHighlightRecallIndex: (index: number) => void;
+  onLoadMoreCommandCompletions: () => void;
+  onSelectCommandCompletion: (item: CommandCompletionItem) => void;
   onSelectRecallCommand: (commandText: string) => void;
   onSelectAutocomplete: (commandText: string) => void;
   onSelectPathCompletion: (item: PathCompletionItem) => void;
-  pathCompletionItems: PathCompletionItem[];
-  pathVisible: boolean;
+  pathSuggestionCount: number;
   recallItems: HistoryRecallItem[];
   recallVisible: boolean;
   selectedIndex: number | null;
   selectedRecallItem: HistoryRecallItem | null;
 }) {
-  const items = pathVisible
-    ? pathCompletionItems
-    : recallVisible
-      ? recallItems
-      : autocompleteItems;
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const selectedItemRef = useRef<HTMLButtonElement | null>(null);
+  const visibleItemCount = recallVisible
+    ? recallItems.length
+    : inlineSuggestionItems.length;
+  const suggestionSummary = [
+    commandSuggestionCount > 0
+      ? `${commandSuggestionCount}${commandHasMore ? "+" : ""} cmd`
+      : null,
+    pathSuggestionCount > 0 ? `${pathSuggestionCount} path` : null,
+    historySuggestionCount > 0 ? `${historySuggestionCount} hist` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
-  if (items.length === 0) {
+  useLayoutEffect(() => {
+    if (!listRef.current || !selectedItemRef.current) {
+      return;
+    }
+
+    selectedItemRef.current.scrollIntoView({
+      block: "nearest",
+    });
+  }, [
+    inlineSuggestionItems.length,
+    recallVisible,
+    selectedIndex,
+    selectedRecallItem?.id,
+  ]);
+
+  if (visibleItemCount === 0) {
     return null;
   }
 
@@ -1839,86 +2348,160 @@ function FloatingSuggestionDropdown({
       }}
     >
       <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2 text-[10px] uppercase tracking-[0.22em] text-[color:var(--text-muted)]">
-        <span>{pathVisible ? "Path" : recallVisible ? "Recall" : "History"}</span>
-        <span>{items.length}</span>
+        <span>{recallVisible ? "Recall" : "Suggestions"}</span>
+        <span>
+          {recallVisible
+            ? visibleItemCount
+            : suggestionSummary || visibleItemCount.toString()}
+          {!recallVisible && commandLoadingMore ? " · loading" : ""}
+        </span>
       </div>
-      <div className="mishell-overlay-scroll max-h-56 overflow-y-auto">
-        {pathVisible
-          ? pathCompletionItems.map((item, index) => (
+      <div
+        ref={listRef}
+        className="mishell-overlay-scroll max-h-56 overflow-y-auto"
+        onScroll={(event) => {
+          if (
+            recallVisible ||
+            commandSuggestionCount === 0 ||
+            !commandHasMore ||
+            commandLoadingMore
+          ) {
+            return;
+          }
+
+          const node = event.currentTarget;
+          const distanceFromBottom = node.scrollHeight - node.clientHeight - node.scrollTop;
+
+          if (distanceFromBottom <= 32) {
+            onLoadMoreCommandCompletions();
+          }
+        }}
+      >
+        {recallVisible
+          ? recallItems.map((item, index) => (
               <button
-                key={`${item.path}-${item.label}`}
+                key={`${item.id}-${item.startedAt}`}
+                ref={selectedRecallItem?.id === item.id ? selectedItemRef : null}
                 type="button"
                 className={cn(
                   "flex w-full items-start justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2.5 text-left transition last:border-b-0",
-                  selectedIndex === index
+                  selectedRecallItem?.id === item.id
                     ? "bg-[color:color-mix(in_srgb,var(--accent)_14%,transparent)]"
                     : "hover:bg-white/4",
                 )}
                 onMouseDown={(event) => {
                   event.preventDefault();
-                  onSelectPathCompletion(item);
+                  onHighlightRecallIndex(index);
+                }}
+                onClick={() => {
+                  onSelectRecallCommand(item.commandText);
                 }}
                 onMouseEnter={() => {
-                  onHighlightIndex(index);
+                  onHighlightRecallIndex(index);
                 }}
               >
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-mono text-sm text-[color:var(--text-primary)]">
-                    {item.label}
+                    {item.commandText}
                   </div>
-                  <div className="mt-1 truncate text-[11px] text-[color:var(--text-secondary)]">
-                    {item.path}
+                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[color:var(--text-secondary)]">
+                    <span>last used {formatRelativeTime(item.startedAt)}</span>
+                    <span>{formatAbsoluteTimestamp(item.startedAt)}</span>
                   </div>
                 </div>
                 <span className="shrink-0 pt-0.5 text-[10px] uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
-                  {item.isDirectory ? "dir" : "file"}
+                  exit {item.exitCode ?? "?"}
                 </span>
               </button>
             ))
-          : recallVisible
-            ? recallItems.map((item, index) => (
+          : inlineSuggestionItems.map((suggestion, index) => {
+              const isSelected = selectedIndex === index;
+
+              if (suggestion.type === "command") {
+                const item = suggestion.item;
+
+                return (
+                  <button
+                    key={suggestion.key}
+                    ref={isSelected ? selectedItemRef : null}
+                    type="button"
+                    className={cn(
+                      "flex w-full items-start justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2.5 text-left transition last:border-b-0",
+                      isSelected
+                        ? "bg-[color:color-mix(in_srgb,var(--accent)_14%,transparent)]"
+                        : "hover:bg-white/4",
+                    )}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      onSelectCommandCompletion(item);
+                    }}
+                    onMouseEnter={() => {
+                      onHighlightIndex(index);
+                    }}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate font-mono text-sm text-[color:var(--text-primary)]">
+                        {item.label}
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[color:var(--text-secondary)]">
+                        {item.description ? <span>{item.description}</span> : null}
+                        {item.detail ? <span>{item.detail}</span> : null}
+                      </div>
+                    </div>
+                    <span className="shrink-0 pt-0.5 text-[10px] uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                      {item.kind}
+                    </span>
+                  </button>
+                );
+              }
+
+              if (suggestion.type === "path") {
+                const item = suggestion.item;
+
+                return (
+                  <button
+                    key={suggestion.key}
+                    ref={isSelected ? selectedItemRef : null}
+                    type="button"
+                    className={cn(
+                      "flex w-full items-start justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2.5 text-left transition last:border-b-0",
+                      isSelected
+                        ? "bg-[color:color-mix(in_srgb,var(--accent)_14%,transparent)]"
+                        : "hover:bg-white/4",
+                    )}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      onSelectPathCompletion(item);
+                    }}
+                    onMouseEnter={() => {
+                      onHighlightIndex(index);
+                    }}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate font-mono text-sm text-[color:var(--text-primary)]">
+                        {item.label}
+                      </div>
+                      <div className="mt-1 truncate text-[11px] text-[color:var(--text-secondary)]">
+                        {item.path}
+                      </div>
+                    </div>
+                    <span className="shrink-0 pt-0.5 text-[10px] uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                      {item.isDirectory ? "dir" : "file"}
+                    </span>
+                  </button>
+                );
+              }
+
+              const item = suggestion.item;
+
+              return (
                 <button
-                  key={`${item.id}-${item.startedAt}`}
+                  key={suggestion.key}
+                  ref={isSelected ? selectedItemRef : null}
                   type="button"
                   className={cn(
                     "flex w-full items-start justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2.5 text-left transition last:border-b-0",
-                    selectedRecallItem?.id === item.id
-                      ? "bg-[color:color-mix(in_srgb,var(--accent)_14%,transparent)]"
-                      : "hover:bg-white/4",
-                  )}
-                  onMouseDown={(event) => {
-                    event.preventDefault();
-                    onHighlightRecallIndex(index);
-                  }}
-                  onClick={() => {
-                    onSelectRecallCommand(item.commandText);
-                  }}
-                  onMouseEnter={() => {
-                    onHighlightRecallIndex(index);
-                  }}
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate font-mono text-sm text-[color:var(--text-primary)]">
-                      {item.commandText}
-                    </div>
-                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[color:var(--text-secondary)]">
-                      <span>last used {formatRelativeTime(item.startedAt)}</span>
-                      <span>{formatAbsoluteTimestamp(item.startedAt)}</span>
-                    </div>
-                  </div>
-                  <span className="shrink-0 pt-0.5 text-[10px] uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
-                    exit {item.exitCode ?? "?"}
-                  </span>
-                </button>
-              ))
-          : historyVisible
-            ? autocompleteItems.map((item, index) => (
-                <button
-                  key={`${item.commandText}-${item.lastStartedAt}`}
-                  type="button"
-                  className={cn(
-                    "flex w-full items-start justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2.5 text-left transition last:border-b-0",
-                    selectedIndex === index
+                    isSelected
                       ? "bg-[color:color-mix(in_srgb,var(--accent)_14%,transparent)]"
                       : "hover:bg-white/4",
                   )}
@@ -1945,8 +2528,13 @@ function FloatingSuggestionDropdown({
                     <div className="mt-1">{formatAbsoluteTimestamp(item.lastStartedAt)}</div>
                   </div>
                 </button>
-              ))
-            : null}
+              );
+            })}
+        {!recallVisible && commandLoadingMore ? (
+          <div className="border-t border-[color:var(--border)] px-3 py-2 text-[11px] text-[color:var(--text-secondary)]">
+            Loading more…
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -1976,6 +2564,17 @@ function HistorySearchDialog({
   onSelectCommand: (commandText: string) => void;
 }) {
   const selectedResult = results[selectedIndex] ?? results[0] ?? null;
+  const selectedResultRef = useRef<HTMLButtonElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!selectedResultRef.current) {
+      return;
+    }
+
+    selectedResultRef.current.scrollIntoView({
+      block: "nearest",
+    });
+  }, [results.length, selectedIndex]);
 
   return (
     <DialogContent
@@ -2048,6 +2647,7 @@ function HistorySearchDialog({
                 {results.map((item, index) => (
                   <button
                     key={item.id}
+                    ref={index === selectedIndex ? selectedResultRef : null}
                     className={cn(
                       "grid gap-3 bg-[color:var(--panel-muted)] px-4 py-4 text-left transition",
                       index === selectedIndex &&
@@ -2153,8 +2753,8 @@ function HistorySearchDialog({
 function StatusPill({ status }: { status: CommandExecution["status"] }) {
   if (status === "running") {
     return (
-      <span className="inline-flex items-center gap-2 border border-[color:var(--border-strong)] px-2 py-1 text-[11px] uppercase tracking-[0.24em] text-[color:var(--accent)]">
-        <span className="h-2 w-2 animate-pulse bg-[color:var(--accent)]" />
+      <span className="inline-flex items-center gap-1.5 border border-[color:var(--border-strong)] px-1.5 py-0.5 text-[10px] uppercase tracking-[0.18em] text-[color:var(--accent)]">
+        <span className="h-1.5 w-1.5 animate-pulse bg-[color:var(--accent)]" />
         running
       </span>
     );
@@ -2162,16 +2762,16 @@ function StatusPill({ status }: { status: CommandExecution["status"] }) {
 
   if (status === "succeeded") {
     return (
-      <span className="inline-flex items-center gap-2 border border-emerald-400/40 px-2 py-1 text-[11px] uppercase tracking-[0.24em] text-emerald-200">
-        <Check className="h-3.5 w-3.5" />
+      <span className="inline-flex items-center gap-1.5 border border-emerald-400/40 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.18em] text-emerald-200">
+        <Check className="h-3 w-3" />
         success
       </span>
     );
   }
 
   return (
-    <span className="inline-flex items-center gap-2 border border-amber-400/40 px-2 py-1 text-[11px] uppercase tracking-[0.24em] text-amber-200">
-      <TriangleAlert className="h-3.5 w-3.5" />
+    <span className="inline-flex items-center gap-1.5 border border-amber-400/40 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.18em] text-amber-200">
+      <TriangleAlert className="h-3 w-3" />
       failed
     </span>
   );
@@ -2330,6 +2930,23 @@ function measureTextareaCaret(textarea: HTMLTextAreaElement) {
 
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function mergeCommandCompletionItems(
+  currentItems: CommandCompletionItem[],
+  nextItems: CommandCompletionItem[],
+): CommandCompletionItem[] {
+  const merged = new Map<string, CommandCompletionItem>();
+
+  for (const item of currentItems) {
+    merged.set(`${item.kind}:${item.label}:${item.nextValue}:${item.source}`, item);
+  }
+
+  for (const item of nextItems) {
+    merged.set(`${item.kind}:${item.label}:${item.nextValue}:${item.source}`, item);
+  }
+
+  return [...merged.values()];
 }
 
 function formatDuration(durationMs: number | null) {
