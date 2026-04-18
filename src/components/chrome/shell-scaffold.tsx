@@ -55,6 +55,11 @@ import {
   type MishellUiColorVar,
   saveThemeCustomization,
 } from "@/lib/mishell-ui-theme";
+import {
+  buildInlineSuggestionItems,
+  getInlineSuggestionValue,
+  type InlineSuggestionItem,
+} from "@/lib/inline-suggestions";
 import { shouldRequestPathCompletions } from "@/lib/path-completion";
 import { cn } from "@/lib/utils";
 
@@ -357,24 +362,22 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     ? executions.find((execution) => execution.id === fullOutputExecutionId) ?? null
     : null;
   const recallVisible = recallSession !== null && recallSession.items.length > 0;
-  const commandCompletionVisible =
-    commandCompletionItems.length > 0 && recallSession === null;
-  const historyAutocompleteVisible =
-    autocompleteItems.length > 0 &&
-    recallSession === null &&
-    !commandCompletionVisible;
-  const pathCompletionVisible =
-    pathCompletionItems.length > 0 &&
-    recallSession === null &&
-    !commandCompletionVisible;
-  const selectedCommandCompletion =
-    autocompleteIndex === null
-      ? null
-      : commandCompletionItems[autocompleteIndex] ?? null;
-  const selectedAutocomplete =
-    autocompleteIndex === null ? null : autocompleteItems[autocompleteIndex] ?? null;
-  const selectedPathCompletion =
-    autocompleteIndex === null ? null : pathCompletionItems[autocompleteIndex] ?? null;
+  const inlineSuggestionItems = useMemo(
+    () =>
+      buildInlineSuggestionItems({
+        commandCompletionItems,
+        historyAutocompleteItems: autocompleteItems,
+        pathCompletionItems,
+      }),
+    [autocompleteItems, commandCompletionItems, pathCompletionItems],
+  );
+  const inlineSuggestionsVisible =
+    inlineSuggestionItems.length > 0 && recallSession === null;
+  const hasStructuredInlineSuggestions =
+    commandCompletionItems.length > 0 || pathCompletionItems.length > 0;
+  const hasHistoryInlineSuggestions = autocompleteItems.length > 0;
+  const selectedInlineSuggestion =
+    autocompleteIndex === null ? null : inlineSuggestionItems[autocompleteIndex] ?? null;
   const selectedRecallItem =
     recallSession === null ? null : recallSession.items[recallSession.index] ?? null;
   const activeTheme =
@@ -486,6 +489,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     });
 
     setRecallSession(null);
+    clearCommandCompletionState();
     setDraftValue(commandText, "system");
     setAutocompleteItems(continuationItems);
     setPathCompletionItems([]);
@@ -1048,18 +1052,18 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     }
   });
 
-  const navigateAutocomplete = useEffectEvent((direction: "next" | "prev") => {
-    if (!historyAutocompleteVisible) {
+  const navigateInlineSuggestions = useEffectEvent((direction: "next" | "prev") => {
+    if (!inlineSuggestionsVisible) {
       return false;
     }
 
     setAutocompleteIndex((current) => {
-      if (autocompleteItems.length === 0) {
+      if (inlineSuggestionItems.length === 0) {
         return null;
       }
 
       if (current === null) {
-        return direction === "next" ? 0 : autocompleteItems.length - 1;
+        return direction === "next" ? 0 : inlineSuggestionItems.length - 1;
       }
 
       if (direction === "prev") {
@@ -1067,65 +1071,11 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
       }
 
       const nextIndex = current + 1;
-      return clampIndex(nextIndex, autocompleteItems.length);
+      return clampIndex(nextIndex, inlineSuggestionItems.length);
     });
 
     return true;
   });
-
-  const navigateCommandCompletions = useEffectEvent(
-    (direction: "next" | "prev") => {
-      if (!commandCompletionVisible) {
-        return false;
-      }
-
-      setAutocompleteIndex((current) => {
-        if (commandCompletionItems.length === 0) {
-          return null;
-        }
-
-        if (current === null) {
-          return direction === "next" ? 0 : commandCompletionItems.length - 1;
-        }
-
-        if (direction === "prev") {
-          return current <= 0 ? null : current - 1;
-        }
-
-        const nextIndex = current + 1;
-        return clampIndex(nextIndex, commandCompletionItems.length);
-      });
-
-      return true;
-    },
-  );
-
-  const navigatePathCompletions = useEffectEvent(
-    (direction: "next" | "prev") => {
-      if (!pathCompletionVisible) {
-        return false;
-      }
-
-      setAutocompleteIndex((current) => {
-        if (pathCompletionItems.length === 0) {
-          return null;
-        }
-
-        if (current === null) {
-          return direction === "next" ? 0 : pathCompletionItems.length - 1;
-        }
-
-        if (direction === "prev") {
-          return current <= 0 ? null : current - 1;
-        }
-
-        const nextIndex = current + 1;
-        return clampIndex(nextIndex, pathCompletionItems.length);
-      });
-
-      return true;
-    },
-  );
 
   const requestAutocomplete = useEffectEvent(async () => {
     const normalizedDraft = draft.trim();
@@ -1152,7 +1102,6 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
 
       startTransition(() => {
         setAutocompleteItems(response.items);
-        setPathCompletionItems([]);
         setAutocompleteIndex(null);
       });
 
@@ -1275,15 +1224,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
 
       startTransition(() => {
         if (mergeIntoCommandCompletions) {
-          setCommandCompletionItems((currentItems) =>
-            mergeCommandCompletionItems(
-              currentItems,
-              response.items.map((item) =>
-                mapPathCompletionToCommandCompletion(item),
-              ),
-            ),
-          );
-          setPathCompletionItems([]);
+          setPathCompletionItems(response.items);
         } else {
           clearCommandCompletionState();
           setPathCompletionItems(response.items);
@@ -1314,31 +1255,74 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
     setAutocompleteIndex(null);
   });
 
-  const acceptCommandCompletion = useEffectEvent(() => {
-    if (!selectedCommandCompletion) {
+  const acceptInlineSuggestion = useEffectEvent(() => {
+    if (!selectedInlineSuggestion) {
       return false;
     }
 
-    applyCommandCompletionSelection(selectedCommandCompletion);
+    if (selectedInlineSuggestion.type === "command") {
+      applyCommandCompletionSelection(selectedInlineSuggestion.item);
+      return true;
+    }
+
+    if (selectedInlineSuggestion.type === "path") {
+      applyPathCompletionSelection(selectedInlineSuggestion.item);
+      return true;
+    }
+
+    applyAutocompleteSelection(selectedInlineSuggestion.item.commandText);
     return true;
   });
 
-  const acceptAutocomplete = useEffectEvent(() => {
-    if (!selectedAutocomplete) {
+  const cycleInlineSuggestions = useEffectEvent(() => {
+    if (!inlineSuggestionsVisible) {
       return false;
     }
 
-    applyAutocompleteSelection(selectedAutocomplete.commandText);
-    return true;
+    if (autocompleteIndex === null) {
+      navigateInlineSuggestions("next");
+      return true;
+    }
+
+    if (
+      selectedInlineSuggestion &&
+      getInlineSuggestionValue(selectedInlineSuggestion) === draft.trim() &&
+      inlineSuggestionItems.length > 1
+    ) {
+      navigateInlineSuggestions("next");
+      return true;
+    }
+
+    return acceptInlineSuggestion();
   });
 
-  const acceptPathCompletion = useEffectEvent(() => {
-    if (!selectedPathCompletion) {
-      return false;
+  const requestInlineSuggestions = useEffectEvent(async () => {
+    const [commandCompletionResult, didFindHistory] = await Promise.all([
+      requestCommandCompletions(),
+      requestAutocomplete(),
+    ]);
+
+    let didFindPath = false;
+
+    if (commandCompletionResult.yieldToPath) {
+      didFindPath = await requestPathCompletions({
+        mergeIntoCommandCompletions: commandCompletionResult.found,
+      });
+    } else if (!commandCompletionResult.found && !commandCompletionResult.resolvedCommand) {
+      const pathPreferred =
+        shouldRequestPathCompletions(draft) || !didFindHistory;
+
+      if (pathPreferred) {
+        didFindPath = await requestPathCompletions();
+      }
     }
 
-    applyPathCompletionSelection(selectedPathCompletion);
-    return true;
+    return {
+      found:
+        commandCompletionResult.found || didFindHistory || didFindPath,
+      hasStructured:
+        commandCompletionResult.found || didFindPath,
+    };
   });
 
   const acceptRecallSelection = useEffectEvent(() => {
@@ -1462,12 +1446,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         !event.metaKey &&
         !event.ctrlKey &&
         !event.altKey &&
-        (
-          recallVisible ||
-          commandCompletionVisible ||
-          pathCompletionVisible ||
-          historyAutocompleteVisible
-        )
+        (recallVisible || inlineSuggestionsVisible)
       ) {
         event.preventDefault();
         closeInlineSuggestions();
@@ -1494,39 +1473,11 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         !event.metaKey &&
         !event.ctrlKey &&
         !event.altKey &&
-        commandCompletionVisible &&
+        inlineSuggestionsVisible &&
         autocompleteIndex !== null
       ) {
         event.preventDefault();
-        acceptCommandCompletion();
-        return true;
-      }
-
-      if (
-        event.key === "Enter" &&
-        !event.shiftKey &&
-        !event.metaKey &&
-        !event.ctrlKey &&
-        !event.altKey &&
-        pathCompletionVisible &&
-        autocompleteIndex !== null
-      ) {
-        event.preventDefault();
-        acceptPathCompletion();
-        return true;
-      }
-
-      if (
-        event.key === "Enter" &&
-        !event.shiftKey &&
-        !event.metaKey &&
-        !event.ctrlKey &&
-        !event.altKey &&
-        historyAutocompleteVisible &&
-        autocompleteIndex !== null
-      ) {
-        event.preventDefault();
-        acceptAutocomplete();
+        acceptInlineSuggestion();
         return true;
       }
 
@@ -1549,36 +1500,10 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         !event.metaKey &&
         !event.ctrlKey &&
         !event.altKey &&
-        commandCompletionVisible
+        inlineSuggestionsVisible
       ) {
         event.preventDefault();
-        navigateCommandCompletions("next");
-        return true;
-      }
-
-      if (
-        event.key === "ArrowDown" &&
-        !event.shiftKey &&
-        !event.metaKey &&
-        !event.ctrlKey &&
-        !event.altKey &&
-        pathCompletionVisible
-      ) {
-        event.preventDefault();
-        navigatePathCompletions("next");
-        return true;
-      }
-
-      if (
-        event.key === "ArrowDown" &&
-        !event.shiftKey &&
-        !event.metaKey &&
-        !event.ctrlKey &&
-        !event.altKey &&
-        historyAutocompleteVisible
-      ) {
-        event.preventDefault();
-        navigateAutocomplete("next");
+        navigateInlineSuggestions("next");
         return true;
       }
 
@@ -1590,82 +1515,23 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         !event.altKey
       ) {
         event.preventDefault();
-        if (commandCompletionVisible) {
-          if (autocompleteIndex === null) {
-            navigateCommandCompletions("next");
-            return true;
-          }
+        if (inlineSuggestionsVisible) {
+          if (!hasStructuredInlineSuggestions && hasHistoryInlineSuggestions) {
+            void requestInlineSuggestions().then((result) => {
+              if (result.hasStructured) {
+                return;
+              }
 
-          if (
-            selectedCommandCompletion &&
-            selectedCommandCompletion.nextValue.trim() === draft.trim() &&
-            commandCompletionItems.length > 1
-          ) {
-            navigateCommandCompletions("next");
-            return true;
-          }
-
-          acceptCommandCompletion();
-          return true;
-        }
-
-        if (pathCompletionVisible) {
-          navigatePathCompletions("next");
-          return true;
-        }
-
-        if (historyAutocompleteVisible) {
-          if (autocompleteIndex === null) {
-            navigateAutocomplete("next");
-            return true;
-          }
-
-          if (
-            selectedAutocomplete &&
-            selectedAutocomplete.commandText.trim() === draft.trim() &&
-            autocompleteItems.length > 1
-          ) {
-            navigateAutocomplete("next");
-            return true;
-          }
-
-          acceptAutocomplete();
-          return true;
-        }
-
-        void requestCommandCompletions().then((commandCompletionResult) => {
-          if (commandCompletionResult.yieldToPath) {
-            void requestPathCompletions({
-              mergeIntoCommandCompletions: commandCompletionResult.found,
+              cycleInlineSuggestions();
             });
-            return;
+            return true;
           }
 
-          if (commandCompletionResult.found) {
-            return;
-          }
+          cycleInlineSuggestions();
+          return true;
+        }
 
-          const pathPreferred =
-            !commandCompletionResult.resolvedCommand &&
-            shouldRequestPathCompletions(draft);
-
-          if (pathPreferred) {
-            void requestPathCompletions();
-            return;
-          }
-
-          void requestAutocomplete().then((didFindHistory) => {
-            if (didFindHistory) {
-              return;
-            }
-
-            if (commandCompletionResult.resolvedCommand) {
-              return;
-            }
-
-            void requestPathCompletions();
-          });
-        });
+        void requestInlineSuggestions();
         return true;
       }
 
@@ -1675,39 +1541,11 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
         !event.metaKey &&
         !event.ctrlKey &&
         !event.altKey &&
-        commandCompletionVisible &&
+        inlineSuggestionsVisible &&
         autocompleteIndex !== null
       ) {
         event.preventDefault();
-        navigateCommandCompletions("prev");
-        return true;
-      }
-
-      if (
-        event.key === "ArrowUp" &&
-        !event.shiftKey &&
-        !event.metaKey &&
-        !event.ctrlKey &&
-        !event.altKey &&
-        pathCompletionVisible &&
-        autocompleteIndex !== null
-      ) {
-        event.preventDefault();
-        navigatePathCompletions("prev");
-        return true;
-      }
-
-      if (
-        event.key === "ArrowUp" &&
-        !event.shiftKey &&
-        !event.metaKey &&
-        !event.ctrlKey &&
-        !event.altKey &&
-        historyAutocompleteVisible &&
-        autocompleteIndex !== null
-      ) {
-        event.preventDefault();
-        navigateAutocomplete("prev");
+        navigateInlineSuggestions("prev");
         return true;
       }
 
@@ -1877,12 +1715,11 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                       latestExecution={latestExecution}
                     />
                     <ShellEditor
-                      autocompleteItems={autocompleteItems}
-                      commandCompletionItems={commandCompletionItems}
+                      commandSuggestionCount={commandCompletionItems.length}
                       commandHasMore={commandCompletionHasMore}
                       commandLoadingMore={commandCompletionLoadingMore}
-                      commandVisible={commandCompletionVisible}
-                      historyVisible={historyAutocompleteVisible}
+                      historySuggestionCount={autocompleteItems.length}
+                      inlineSuggestionItems={inlineSuggestionItems}
                       onHighlightIndex={setAutocompleteIndex}
                       onHighlightRecallIndex={hoverRecallHistory}
                       onLoadMoreCommandCompletions={() => {
@@ -1895,8 +1732,7 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
                       onSelectCommandCompletion={applyCommandCompletionSelection}
                       onSelectAutocomplete={applyAutocompleteSelection}
                       onSelectPathCompletion={applyPathCompletionSelection}
-                      pathCompletionItems={pathCompletionItems}
-                      pathVisible={pathCompletionVisible}
+                      pathSuggestionCount={pathCompletionItems.length}
                       selectedIndex={autocompleteIndex}
                       ref={editorRef}
                       value={draft}
@@ -2000,12 +1836,11 @@ export function ShellScaffold({ bootstrap }: { bootstrap: BootstrapPayload }) {
 }
 
 type ShellEditorProps = {
-  autocompleteItems: HistoryAutocompleteItem[];
-  commandCompletionItems: CommandCompletionItem[];
+  commandSuggestionCount: number;
   commandHasMore: boolean;
   commandLoadingMore: boolean;
-  commandVisible: boolean;
-  historyVisible: boolean;
+  historySuggestionCount: number;
+  inlineSuggestionItems: InlineSuggestionItem[];
   onHighlightIndex: (index: number | null) => void;
   onHighlightRecallIndex: (index: number) => void;
   onLoadMoreCommandCompletions: () => void;
@@ -2020,8 +1855,7 @@ type ShellEditorProps = {
   disabled: boolean;
   onChange: (value: string) => void;
   onKeyDown?: (event: React.KeyboardEvent<HTMLTextAreaElement>) => boolean | void;
-  pathCompletionItems: PathCompletionItem[];
-  pathVisible: boolean;
+  pathSuggestionCount: number;
   selectedIndex: number | null;
   onSubmit: () => void;
 };
@@ -2044,12 +1878,11 @@ const EDITOR_MAX_HEIGHT =
 const TERMINAL_SESSION_RESET = "\u001bc\u001b[3J\u001b[2J\u001b[H";
 
 const ShellEditor = ({
-  autocompleteItems,
-  commandCompletionItems,
+  commandSuggestionCount,
   commandHasMore,
   commandLoadingMore,
-  commandVisible,
-  historyVisible,
+  historySuggestionCount,
+  inlineSuggestionItems,
   onHighlightIndex,
   onHighlightRecallIndex,
   onLoadMoreCommandCompletions,
@@ -2064,8 +1897,7 @@ const ShellEditor = ({
   disabled,
   onChange,
   onKeyDown,
-  pathCompletionItems,
-  pathVisible,
+  pathSuggestionCount,
   selectedIndex,
   onSubmit,
   ref,
@@ -2094,7 +1926,7 @@ const ShellEditor = ({
 
   const scrollEditor = editorHeight >= EDITOR_MAX_HEIGHT;
   const suggestionVisible =
-    commandVisible || pathVisible || historyVisible || recallVisible;
+    inlineSuggestionItems.length > 0 || recallVisible;
 
   useLayoutEffect(() => {
     const textarea = ref.current;
@@ -2108,9 +1940,7 @@ const ShellEditor = ({
     setFloatingAnchor(getFloatingSuggestionAnchor(textarea, container));
   }, [
     editorHeight,
-    commandVisible,
-    historyVisible,
-    pathVisible,
+    inlineSuggestionItems.length,
     recallVisible,
     ref,
     selectedIndex,
@@ -2203,12 +2033,11 @@ const ShellEditor = ({
       {suggestionVisible && floatingAnchor ? (
         <FloatingSuggestionDropdown
           anchor={floatingAnchor}
-          autocompleteItems={autocompleteItems}
-          commandCompletionItems={commandCompletionItems}
+          commandSuggestionCount={commandSuggestionCount}
           commandHasMore={commandHasMore}
           commandLoadingMore={commandLoadingMore}
-          commandVisible={commandVisible}
-          historyVisible={historyVisible}
+          historySuggestionCount={historySuggestionCount}
+          inlineSuggestionItems={inlineSuggestionItems}
           onHighlightIndex={onHighlightIndex}
           onHighlightRecallIndex={onHighlightRecallIndex}
           onLoadMoreCommandCompletions={onLoadMoreCommandCompletions}
@@ -2216,8 +2045,7 @@ const ShellEditor = ({
           onSelectCommandCompletion={onSelectCommandCompletion}
           onSelectAutocomplete={onSelectAutocomplete}
           onSelectPathCompletion={onSelectPathCompletion}
-          pathCompletionItems={pathCompletionItems}
-          pathVisible={pathVisible}
+          pathSuggestionCount={pathSuggestionCount}
           recallItems={recallItems}
           recallVisible={recallVisible}
           selectedIndex={selectedIndex}
@@ -2439,12 +2267,11 @@ function CommandCard({
 
 function FloatingSuggestionDropdown({
   anchor,
-  autocompleteItems,
-  commandCompletionItems,
+  commandSuggestionCount,
   commandHasMore,
   commandLoadingMore,
-  commandVisible,
-  historyVisible,
+  historySuggestionCount,
+  inlineSuggestionItems,
   onHighlightIndex,
   onHighlightRecallIndex,
   onLoadMoreCommandCompletions,
@@ -2452,20 +2279,18 @@ function FloatingSuggestionDropdown({
   onSelectRecallCommand,
   onSelectAutocomplete,
   onSelectPathCompletion,
-  pathCompletionItems,
-  pathVisible,
+  pathSuggestionCount,
   recallItems,
   recallVisible,
   selectedIndex,
   selectedRecallItem,
 }: {
   anchor: FloatingSuggestionAnchor;
-  autocompleteItems: HistoryAutocompleteItem[];
-  commandCompletionItems: CommandCompletionItem[];
+  commandSuggestionCount: number;
   commandHasMore: boolean;
   commandLoadingMore: boolean;
-  commandVisible: boolean;
-  historyVisible: boolean;
+  historySuggestionCount: number;
+  inlineSuggestionItems: InlineSuggestionItem[];
   onHighlightIndex: (index: number | null) => void;
   onHighlightRecallIndex: (index: number) => void;
   onLoadMoreCommandCompletions: () => void;
@@ -2473,22 +2298,26 @@ function FloatingSuggestionDropdown({
   onSelectRecallCommand: (commandText: string) => void;
   onSelectAutocomplete: (commandText: string) => void;
   onSelectPathCompletion: (item: PathCompletionItem) => void;
-  pathCompletionItems: PathCompletionItem[];
-  pathVisible: boolean;
+  pathSuggestionCount: number;
   recallItems: HistoryRecallItem[];
   recallVisible: boolean;
   selectedIndex: number | null;
   selectedRecallItem: HistoryRecallItem | null;
 }) {
-  const items = commandVisible
-    ? commandCompletionItems
-    : pathVisible
-    ? pathCompletionItems
-    : recallVisible
-      ? recallItems
-      : autocompleteItems;
   const listRef = useRef<HTMLDivElement | null>(null);
   const selectedItemRef = useRef<HTMLButtonElement | null>(null);
+  const visibleItemCount = recallVisible
+    ? recallItems.length
+    : inlineSuggestionItems.length;
+  const suggestionSummary = [
+    commandSuggestionCount > 0
+      ? `${commandSuggestionCount}${commandHasMore ? "+" : ""} cmd`
+      : null,
+    pathSuggestionCount > 0 ? `${pathSuggestionCount} path` : null,
+    historySuggestionCount > 0 ? `${historySuggestionCount} hist` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   useLayoutEffect(() => {
     if (!listRef.current || !selectedItemRef.current) {
@@ -2499,15 +2328,13 @@ function FloatingSuggestionDropdown({
       block: "nearest",
     });
   }, [
-    commandVisible,
-    items.length,
-    pathVisible,
+    inlineSuggestionItems.length,
     recallVisible,
     selectedIndex,
     selectedRecallItem?.id,
   ]);
 
-  if (items.length === 0) {
+  if (visibleItemCount === 0) {
     return null;
   }
 
@@ -2521,19 +2348,12 @@ function FloatingSuggestionDropdown({
       }}
     >
       <div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2 text-[10px] uppercase tracking-[0.22em] text-[color:var(--text-muted)]">
+        <span>{recallVisible ? "Recall" : "Suggestions"}</span>
         <span>
-          {commandVisible
-            ? "Command"
-            : pathVisible
-              ? "Path"
-              : recallVisible
-                ? "Recall"
-                : "History"}
-        </span>
-        <span>
-          {items.length}
-          {commandVisible && commandHasMore ? "+" : ""}
-          {commandVisible && commandLoadingMore ? "…" : ""}
+          {recallVisible
+            ? visibleItemCount
+            : suggestionSummary || visibleItemCount.toString()}
+          {!recallVisible && commandLoadingMore ? " · loading" : ""}
         </span>
       </div>
       <div
@@ -2541,7 +2361,8 @@ function FloatingSuggestionDropdown({
         className="mishell-overlay-scroll max-h-56 overflow-y-auto"
         onScroll={(event) => {
           if (
-            !commandVisible ||
+            recallVisible ||
+            commandSuggestionCount === 0 ||
             !commandHasMore ||
             commandLoadingMore
           ) {
@@ -2556,119 +2377,131 @@ function FloatingSuggestionDropdown({
           }
         }}
       >
-        {commandVisible
-          ? commandCompletionItems.map((item, index) => (
+        {recallVisible
+          ? recallItems.map((item, index) => (
               <button
-                key={`${item.kind}-${item.label}-${index}`}
-                ref={selectedIndex === index ? selectedItemRef : null}
+                key={`${item.id}-${item.startedAt}`}
+                ref={selectedRecallItem?.id === item.id ? selectedItemRef : null}
                 type="button"
                 className={cn(
                   "flex w-full items-start justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2.5 text-left transition last:border-b-0",
-                  selectedIndex === index
+                  selectedRecallItem?.id === item.id
                     ? "bg-[color:color-mix(in_srgb,var(--accent)_14%,transparent)]"
                     : "hover:bg-white/4",
                 )}
                 onMouseDown={(event) => {
                   event.preventDefault();
-                  onSelectCommandCompletion(item);
+                  onHighlightRecallIndex(index);
+                }}
+                onClick={() => {
+                  onSelectRecallCommand(item.commandText);
                 }}
                 onMouseEnter={() => {
-                  onHighlightIndex(index);
+                  onHighlightRecallIndex(index);
                 }}
               >
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-mono text-sm text-[color:var(--text-primary)]">
-                    {item.label}
+                    {item.commandText}
                   </div>
                   <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[color:var(--text-secondary)]">
-                    {item.description ? <span>{item.description}</span> : null}
-                    {item.detail ? <span>{item.detail}</span> : null}
+                    <span>last used {formatRelativeTime(item.startedAt)}</span>
+                    <span>{formatAbsoluteTimestamp(item.startedAt)}</span>
                   </div>
                 </div>
                 <span className="shrink-0 pt-0.5 text-[10px] uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
-                  {item.kind}
+                  exit {item.exitCode ?? "?"}
                 </span>
               </button>
             ))
-          : pathVisible
-          ? pathCompletionItems.map((item, index) => (
-              <button
-                key={`${item.path}-${item.label}`}
-                ref={selectedIndex === index ? selectedItemRef : null}
-                type="button"
-                className={cn(
-                  "flex w-full items-start justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2.5 text-left transition last:border-b-0",
-                  selectedIndex === index
-                    ? "bg-[color:color-mix(in_srgb,var(--accent)_14%,transparent)]"
-                    : "hover:bg-white/4",
-                )}
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  onSelectPathCompletion(item);
-                }}
-                onMouseEnter={() => {
-                  onHighlightIndex(index);
-                }}
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="truncate font-mono text-sm text-[color:var(--text-primary)]">
-                    {item.label}
-                  </div>
-                  <div className="mt-1 truncate text-[11px] text-[color:var(--text-secondary)]">
-                    {item.path}
-                  </div>
-                </div>
-                <span className="shrink-0 pt-0.5 text-[10px] uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
-                  {item.isDirectory ? "dir" : "file"}
-                </span>
-              </button>
-            ))
-          : recallVisible
-            ? recallItems.map((item, index) => (
+          : inlineSuggestionItems.map((suggestion, index) => {
+              const isSelected = selectedIndex === index;
+
+              if (suggestion.type === "command") {
+                const item = suggestion.item;
+
+                return (
+                  <button
+                    key={suggestion.key}
+                    ref={isSelected ? selectedItemRef : null}
+                    type="button"
+                    className={cn(
+                      "flex w-full items-start justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2.5 text-left transition last:border-b-0",
+                      isSelected
+                        ? "bg-[color:color-mix(in_srgb,var(--accent)_14%,transparent)]"
+                        : "hover:bg-white/4",
+                    )}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      onSelectCommandCompletion(item);
+                    }}
+                    onMouseEnter={() => {
+                      onHighlightIndex(index);
+                    }}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate font-mono text-sm text-[color:var(--text-primary)]">
+                        {item.label}
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[color:var(--text-secondary)]">
+                        {item.description ? <span>{item.description}</span> : null}
+                        {item.detail ? <span>{item.detail}</span> : null}
+                      </div>
+                    </div>
+                    <span className="shrink-0 pt-0.5 text-[10px] uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                      {item.kind}
+                    </span>
+                  </button>
+                );
+              }
+
+              if (suggestion.type === "path") {
+                const item = suggestion.item;
+
+                return (
+                  <button
+                    key={suggestion.key}
+                    ref={isSelected ? selectedItemRef : null}
+                    type="button"
+                    className={cn(
+                      "flex w-full items-start justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2.5 text-left transition last:border-b-0",
+                      isSelected
+                        ? "bg-[color:color-mix(in_srgb,var(--accent)_14%,transparent)]"
+                        : "hover:bg-white/4",
+                    )}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      onSelectPathCompletion(item);
+                    }}
+                    onMouseEnter={() => {
+                      onHighlightIndex(index);
+                    }}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate font-mono text-sm text-[color:var(--text-primary)]">
+                        {item.label}
+                      </div>
+                      <div className="mt-1 truncate text-[11px] text-[color:var(--text-secondary)]">
+                        {item.path}
+                      </div>
+                    </div>
+                    <span className="shrink-0 pt-0.5 text-[10px] uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+                      {item.isDirectory ? "dir" : "file"}
+                    </span>
+                  </button>
+                );
+              }
+
+              const item = suggestion.item;
+
+              return (
                 <button
-                  key={`${item.id}-${item.startedAt}`}
-                  ref={selectedRecallItem?.id === item.id ? selectedItemRef : null}
+                  key={suggestion.key}
+                  ref={isSelected ? selectedItemRef : null}
                   type="button"
                   className={cn(
                     "flex w-full items-start justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2.5 text-left transition last:border-b-0",
-                    selectedRecallItem?.id === item.id
-                      ? "bg-[color:color-mix(in_srgb,var(--accent)_14%,transparent)]"
-                      : "hover:bg-white/4",
-                  )}
-                  onMouseDown={(event) => {
-                    event.preventDefault();
-                    onHighlightRecallIndex(index);
-                  }}
-                  onClick={() => {
-                    onSelectRecallCommand(item.commandText);
-                  }}
-                  onMouseEnter={() => {
-                    onHighlightRecallIndex(index);
-                  }}
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate font-mono text-sm text-[color:var(--text-primary)]">
-                      {item.commandText}
-                    </div>
-                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[color:var(--text-secondary)]">
-                      <span>last used {formatRelativeTime(item.startedAt)}</span>
-                      <span>{formatAbsoluteTimestamp(item.startedAt)}</span>
-                    </div>
-                  </div>
-                  <span className="shrink-0 pt-0.5 text-[10px] uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
-                    exit {item.exitCode ?? "?"}
-                  </span>
-                </button>
-              ))
-          : historyVisible
-            ? autocompleteItems.map((item, index) => (
-                <button
-                  key={`${item.commandText}-${item.lastStartedAt}`}
-                  ref={selectedIndex === index ? selectedItemRef : null}
-                  type="button"
-                  className={cn(
-                    "flex w-full items-start justify-between gap-3 border-b border-[color:var(--border)] px-3 py-2.5 text-left transition last:border-b-0",
-                    selectedIndex === index
+                    isSelected
                       ? "bg-[color:color-mix(in_srgb,var(--accent)_14%,transparent)]"
                       : "hover:bg-white/4",
                   )}
@@ -2695,9 +2528,9 @@ function FloatingSuggestionDropdown({
                     <div className="mt-1">{formatAbsoluteTimestamp(item.lastStartedAt)}</div>
                   </div>
                 </button>
-              ))
-            : null}
-        {commandVisible && commandLoadingMore ? (
+              );
+            })}
+        {!recallVisible && commandLoadingMore ? (
           <div className="border-t border-[color:var(--border)] px-3 py-2 text-[11px] text-[color:var(--text-secondary)]">
             Loading more…
           </div>
@@ -3114,19 +2947,6 @@ function mergeCommandCompletionItems(
   }
 
   return [...merged.values()];
-}
-
-function mapPathCompletionToCommandCompletion(
-  item: PathCompletionItem,
-): CommandCompletionItem {
-  return {
-    nextValue: item.nextValue,
-    label: item.label,
-    description: item.isDirectory ? "Directory" : "Path",
-    detail: item.path,
-    kind: "value",
-    source: "preview",
-  };
 }
 
 function formatDuration(durationMs: number | null) {
